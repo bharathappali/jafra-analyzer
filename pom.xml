@@ -6,7 +6,7 @@
 
     <groupId>io.jafra</groupId>
     <artifactId>jafra-analyzer</artifactId>
-    <version>0.1.0</version>
+    <version>0.0.1</version>
     <name>jafra-analyzer</name>
 
     <properties>

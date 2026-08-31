@@ -1,4 +1,5 @@
-FROM eclipse-temurin:21-jdk AS build
+# Maven/JDK on the builder's native arch; copy bytecode into a TARGET JRE image.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 COPY contracts ./contracts
 COPY jafra-analyzer ./jafra-analyzer
