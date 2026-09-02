@@ -1,6 +1,6 @@
 # Jafra Analyzer
 
-`jafra-analyzer` version `0.0.1` is a Quarkus gRPC receiver. It validates
+`jafra-analyzer` version `0.0.2` is a Quarkus gRPC receiver. It validates
 chunk streams, persists each accepted chunk on the 5 GiB PVC at
 `/var/lib/jafra/analyzer`, stitches contiguous chunks into a per-recording
 JFR file, and serves automated analysis summaries over HTTP.
@@ -31,7 +31,7 @@ filled, then stitching appends the contiguous prefix.
 
 ```bash
 mvn -f jafra-analyzer/pom.xml test
-docker build -f jafra-analyzer/Dockerfile -t quay.io/bharathappali/jafra-analyzer:0.0.1 .
+docker build -f jafra-analyzer/Dockerfile -t quay.io/bharathappali/jafra-analyzer:0.0.2 .
 ```
 
 Build the container from the repository root. Protobuf code is generated from
@@ -41,7 +41,7 @@ required.
 ## Deploy
 
 ```bash
-kind load docker-image quay.io/bharathappali/jafra-analyzer:0.0.1 --name jafra
+kind load docker-image quay.io/bharathappali/jafra-analyzer:0.0.2 --name jafra
 kubectl apply -f deploy/analyzer/deployment.yaml
 kubectl rollout status deployment/jafra-analyzer -n jafra-system
 kubectl logs -n jafra-system deployment/jafra-analyzer
