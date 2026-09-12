@@ -2,8 +2,9 @@
 
 `jafra-analyzer` version `0.0.2` is a Quarkus gRPC receiver. It validates
 chunk streams, persists each accepted chunk on the 5 GiB PVC at
-`/var/lib/jafra/analyzer`, stitches contiguous chunks into a per-recording
-JFR file, and serves automated analysis summaries over HTTP.
+`/var/lib/jafra/analyzer`, and serves automated analysis summaries over HTTP.
+Contiguous chunks are stitched on demand into a bounded `stitch-cache/` for
+`/report` and `/summary` (not kept as a second durable copy).
 
 Durable identity is the presence of `chunks/<chunkId>.meta` after a checksum
 match. The agent can retry or the analyzer can restart; the same chunk ID
@@ -15,17 +16,20 @@ after that metadata file is durable.
 ```text
 /var/lib/jafra/analyzer/
   tmp/<chunkId>.part                 # in-flight frames; discarded on abort/recover
-  chunks/<chunkId>.jfr               # committed payload
+  chunks/<chunkId>.jfr               # committed payload (durable)
   chunks/<chunkId>.meta              # durable identity
-  recordings/<cluster>/<podUID>/<container>/<file>/
-    stitched.jfr                     # contiguous chunks from offset 0
-    manifest.json                    # next expected offset
+  stitch-cache/<hash>.jfr            # on-demand analysis JFRs (TTL + ~1–2 Gi budget)
   identities/<podUID>.json           # namespace + pod name for HTTP queries
 ```
 
 Incomplete `.part` files and payload files without `.meta` are deleted on
-startup. Out-of-order chunks stay on disk until the hole at offset 0 is
-filled, then stitching appends the contiguous prefix.
+startup. Legacy `recordings/**/stitched.jfr` files are removed on recover.
+Out-of-order chunks stay on disk until the hole at offset 0 is filled; only
+the contiguous prefix is available to stitch into the cache.
+
+The stitch-cache reaper deletes unused entries after TTL (default 2 minutes)
+or when the cache exceeds `jafra.storage.stitch-cache.max-bytes` (default 2 Gi).
+It never deletes `chunks/`.
 
 ## Build
 
@@ -49,11 +53,11 @@ kubectl exec -n jafra-system deploy/jafra-analyzer -- ls -la /var/lib/jafra/anal
 ```
 
 Restart the analyzer and confirm previously accepted IDs stay `DUPLICATE`
-while `stitched.jfr` remains.
+(chunks remain; stitch-cache may be empty until the next `/report`).
 
 Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 `GET /q/health`, `GET /q/metrics`). Status includes `durableChunks` and
-`stitchedBytes`.
+`stitchedBytes` (current stitch-cache size).
 
 ## Summary APIs
 
