@@ -7,23 +7,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ChunkStoreTest {
     @Test
-    void commitIsDurableAcrossRestart(@TempDir Path root) throws Exception {
+    void commitIsDurableAcrossRestartWithoutEagerStitch(@TempDir Path root) throws Exception {
         ChunkStore store = new ChunkStore(root);
         store.recover();
         ChunkMetadata first = metadata("chunk-a", 0, new byte[] {1, 2, 3, 4});
         persist(store, first, new byte[] {1, 2, 3, 4});
 
+        assertTrue(Files.exists(store.payloadPath("chunk-a")));
+        assertFalse(Files.exists(root.resolve("stitch-cache")));
+        assertTrue(Files.walk(root.resolve("recordings"))
+                .noneMatch(path -> path.getFileName().toString().equals("stitched.jfr")));
+
         ChunkStore restarted = new ChunkStore(root);
         restarted.recover();
         assertTrue(restarted.contains("chunk-a"));
-        assertEquals(4, Files.size(restarted.stitchedFile(first.recordingId())));
-        assertArrayEquals(new byte[] {1, 2, 3, 4}, Files.readAllBytes(restarted.stitchedFile(first.recordingId())));
+        assertEquals(List.of("chunk-a"), restarted.contiguousChunks(first.recordingId()).stream()
+                .map(ChunkMetadata::chunkId)
+                .toList());
+        Path stitched = root.resolve("on-demand.jfr");
+        assertEquals(4, restarted.stitchTo(stitched, List.of(first.recordingId())));
+        assertArrayEquals(new byte[] {1, 2, 3, 4}, Files.readAllBytes(stitched));
     }
 
     @Test
@@ -50,12 +60,32 @@ class ChunkStoreTest {
         store.recover();
         byte[] later = new byte[] {5, 6};
         persist(store, metadata("chunk-b", 4, later), later);
-        assertEquals(0, Files.size(store.stitchedFile("local-demo/pod/auth-cache/profile-0.jfr")));
+        assertTrue(store.contiguousChunks("local-demo/pod/auth-cache/profile-0.jfr").isEmpty());
 
         byte[] early = new byte[] {1, 2, 3, 4};
         persist(store, metadata("chunk-a", 0, early), early);
-        assertArrayEquals(new byte[] {1, 2, 3, 4, 5, 6},
-                Files.readAllBytes(store.stitchedFile("local-demo/pod/auth-cache/profile-0.jfr")));
+        assertEquals(2, store.contiguousChunks("local-demo/pod/auth-cache/profile-0.jfr").size());
+        Path stitched = root.resolve("stitched-on-demand.jfr");
+        store.stitchTo(stitched, List.of("local-demo/pod/auth-cache/profile-0.jfr"));
+        assertArrayEquals(new byte[] {1, 2, 3, 4, 5, 6}, Files.readAllBytes(stitched));
+    }
+
+    @Test
+    void recoverDeletesLegacyDurableStitchedFiles(@TempDir Path root) throws Exception {
+        ChunkStore store = new ChunkStore(root);
+        store.recover();
+        persist(store, metadata("chunk-a", 0, new byte[] {1, 2}), new byte[] {1, 2});
+
+        Path legacyDir = root.resolve("recordings/local-demo/pod/auth-cache/profile-0.jfr");
+        Files.createDirectories(legacyDir);
+        Files.write(legacyDir.resolve("stitched.jfr"), new byte[] {9, 9, 9});
+        Files.writeString(legacyDir.resolve("manifest.json"), "{\"nextOffset\":2}");
+
+        ChunkStore restarted = new ChunkStore(root);
+        restarted.recover();
+        assertFalse(Files.exists(legacyDir.resolve("stitched.jfr")));
+        assertFalse(Files.exists(legacyDir.resolve("manifest.json")));
+        assertTrue(restarted.contains("chunk-a"));
     }
 
     private static void persist(ChunkStore store, ChunkMetadata metadata, byte[] payload) throws Exception {
@@ -71,6 +101,7 @@ class ChunkStoreTest {
                 "local-demo",
                 "default",
                 "pod",
+                "auth-cache",
                 "auth-cache",
                 "profile-0.jfr",
                 offset,

@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.HexFormat;
 
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.google.protobuf.ByteString;
 
 import io.jafra.analyzer.storage.ChunkStore;
+import io.jafra.analyzer.storage.StitchCache;
 import io.jafra.ingest.v1.AckStatus;
 import io.jafra.ingest.v1.ChunkFrame;
 import io.jafra.ingest.v1.CommitChunk;
@@ -28,19 +30,26 @@ class IngestDurabilityTest {
         byte[] payload = "FLR\0chunk-one".getBytes(StandardCharsets.UTF_8);
         ChunkStore store = new ChunkStore(root);
         store.recover();
-        IngestRegistry registry = new IngestRegistry(new SimpleMeterRegistry(), store, 8, 4096);
+        StitchCache cache = new StitchCache(store, 1024 * 1024, Duration.ofMinutes(2), java.time.Clock.systemUTC(), false);
+        IngestRegistry registry = new IngestRegistry(new SimpleMeterRegistry(), store, cache, 8, 4096);
         var accepted = ingest(registry, payload);
         assertEquals(AckStatus.ACCEPTED, accepted.getStatus());
         assertTrue(store.contains(IngestSession.chunkId(open(payload.length))));
-        assertEquals(payload.length, Files.size(store.stitchedFile(open(payload.length).getRecordingId())));
+        assertEquals(0, cache.totalBytes());
+        assertTrue(Files.walk(root.resolve("recordings"))
+                .noneMatch(path -> path.getFileName().toString().equals("stitched.jfr")));
 
         ChunkStore restarted = new ChunkStore(root);
         restarted.recover();
-        IngestRegistry afterRestart = new IngestRegistry(new SimpleMeterRegistry(), restarted, 8, 4096);
+        StitchCache restartedCache =
+                new StitchCache(restarted, 1024 * 1024, Duration.ofMinutes(2), java.time.Clock.systemUTC(), false);
+        IngestRegistry afterRestart = new IngestRegistry(new SimpleMeterRegistry(), restarted, restartedCache, 8, 4096);
         IngestRegistry.StreamContext replay = afterRestart.openStream();
         var ack = afterRestart.handle(replay, UploadRequest.newBuilder().setOpen(open(payload.length)).build());
         afterRestart.closeStream(replay);
         assertEquals(AckStatus.DUPLICATE, ack.getStatus());
+        cache.close();
+        restartedCache.close();
     }
 
     private static io.jafra.ingest.v1.UploadAck ingest(IngestRegistry registry, byte[] payload) throws Exception {
@@ -62,7 +71,7 @@ class IngestDurabilityTest {
                         .setChunkId(IngestSession.chunkId(open))
                         .setTotalBytes(payload.length)
                         .setChecksumAlgorithm("sha256")
-                        .setChecksum(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload)))
+                        .setChecksum(sha256(payload))
                         .build())
                 .build());
         registry.closeStream(context);
@@ -75,11 +84,17 @@ class IngestDurabilityTest {
                 .setClusterId("local-demo")
                 .setNodeName("worker-1")
                 .setNamespace("default")
-                .setPodUid("pod-uid")
+                .setPodUid("pod")
+                .setPodName("auth-cache")
                 .setContainerName("auth-cache")
-                .setRecordingId("local-demo/pod-uid/auth-cache/profile-0.jfr")
                 .setPhysicalFilename("profile-0.jfr")
+                .setRecordingId("local-demo/pod/auth-cache/profile-0.jfr")
+                .setChunkOffset(0)
                 .setChunkLength(length)
                 .build();
+    }
+
+    private static String sha256(byte[] payload) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload));
     }
 }

@@ -3,10 +3,14 @@ package io.jafra.analyzer.storage;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -33,7 +37,6 @@ public class ChunkStore {
     private final Map<String, ChunkMetadata> committed = new ConcurrentHashMap<>();
     private final Map<String, TreeMap<Long, ChunkMetadata>> byRecording = new ConcurrentHashMap<>();
     private final Map<String, String> podNames = new ConcurrentHashMap<>();
-    private final Map<String, Object> recordingLocks = new ConcurrentHashMap<>();
 
     public ChunkStore(Path root) {
         this.root = root;
@@ -43,12 +46,17 @@ public class ChunkStore {
         this.identitiesDir = root.resolve("identities");
     }
 
+    public Path root() {
+        return root;
+    }
+
     public void recover() throws IOException {
         Files.createDirectories(tmpDir);
         Files.createDirectories(chunksDir);
         Files.createDirectories(recordingsDir);
         Files.createDirectories(identitiesDir);
         deleteOrphans();
+        deleteLegacyStitchedRecordings();
         committed.clear();
         byRecording.clear();
         podNames.clear();
@@ -56,9 +64,6 @@ public class ChunkStore {
         try (Stream<Path> files = Files.list(chunksDir)) {
             files.filter(path -> path.getFileName().toString().endsWith(".meta"))
                     .forEach(this::loadMetaQuietly);
-        }
-        for (String recordingId : byRecording.keySet()) {
-            stitch(recordingId);
         }
         LOG.infof("recovered %d durable chunks under %s", committed.size(), root);
     }
@@ -75,18 +80,17 @@ public class ChunkStore {
         return committed.size();
     }
 
+    /** Bytes of durable chunk payloads (not stitch-cache). */
+    public long chunksBytes() {
+        return committed.values().stream().mapToLong(ChunkMetadata::chunkLength).sum();
+    }
+
+    /**
+     * @deprecated Prefer {@link #chunksBytes()} or stitch-cache size; kept for status JSON compatibility.
+     */
+    @Deprecated
     public long stitchedBytes() {
-        return byRecording.keySet().stream()
-                .map(this::recordingDir)
-                .map(dir -> dir.resolve("stitched.jfr"))
-                .mapToLong(path -> {
-                    try {
-                        return Files.exists(path) ? Files.size(path) : 0;
-                    } catch (IOException error) {
-                        return 0;
-                    }
-                })
-                .sum();
+        return 0;
     }
 
     public boolean hasRoom(long chunkLength) {
@@ -118,11 +122,6 @@ public class ChunkStore {
         byRecording.computeIfAbsent(metadata.recordingId(), ignored -> new TreeMap<>())
                 .put(metadata.chunkOffset(), metadata);
         rememberPodName(metadata.namespace(), metadata.podUid(), metadata.podName());
-        try {
-            stitch(metadata.recordingId());
-        } catch (IOException error) {
-            LOG.warnf(error, "stitch lagged for %s; recover will rebuild", metadata.recordingId());
-        }
     }
 
     public void abort(IncomingWrite incoming) {
@@ -131,12 +130,8 @@ public class ChunkStore {
         }
     }
 
-    public Path stitchedFile(String recordingId) {
-        return recordingDir(recordingId).resolve("stitched.jfr");
-    }
-
-    public Path recordingDirectory(String recordingId) {
-        return recordingDir(recordingId);
+    public Path payloadPath(String chunkId) {
+        return chunksDir.resolve(chunkId + ".jfr");
     }
 
     public Set<String> recordingIds() {
@@ -159,12 +154,94 @@ public class ChunkStore {
         return List.copyOf(chunks.values());
     }
 
-    public RecordingManifest manifest(String recordingId) {
-        try {
-            return readManifest(recordingDir(recordingId).resolve("manifest.json"));
-        } catch (IOException error) {
-            return new RecordingManifest();
+    /** Contiguous chunks from offset 0 for a physical recording (holes stop the prefix). */
+    public List<ChunkMetadata> contiguousChunks(String recordingId) {
+        TreeMap<Long, ChunkMetadata> chunks = byRecording.get(recordingId);
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
         }
+        List<ChunkMetadata> contiguous = new ArrayList<>();
+        long nextOffset = 0;
+        while (true) {
+            ChunkMetadata next = chunks.get(nextOffset);
+            if (next == null) {
+                break;
+            }
+            contiguous.add(next);
+            nextOffset += next.chunkLength();
+        }
+        return contiguous;
+    }
+
+    public RecordingManifest manifest(String recordingId) {
+        RecordingManifest manifest = new RecordingManifest();
+        for (ChunkMetadata chunk : contiguousChunks(recordingId)) {
+            manifest.chunkIds.add(chunk.chunkId());
+            manifest.nextOffset += chunk.chunkLength();
+        }
+        manifest.stitchedBytes = manifest.nextOffset;
+        return manifest;
+    }
+
+    public boolean hasContiguousPrefix(String recordingId) {
+        return !contiguousChunks(recordingId).isEmpty();
+    }
+
+    /**
+     * Concatenate contiguous chunk payloads for each recording id (in order) into {@code target}.
+     *
+     * @return bytes written
+     */
+    public long stitchTo(Path target, List<String> recordingIds) throws IOException {
+        Files.createDirectories(target.getParent());
+        Path part = target.resolveSibling(target.getFileName() + ".part");
+        Files.deleteIfExists(part);
+        long written = 0;
+        try (FileChannel out = FileChannel.open(
+                part,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING)) {
+            for (String recordingId : recordingIds) {
+                List<ChunkMetadata> contiguous = contiguousChunks(recordingId);
+                if (contiguous.isEmpty()) {
+                    throw new IOException("no contiguous chunks for " + recordingId);
+                }
+                for (ChunkMetadata chunk : contiguous) {
+                    try (FileChannel in = FileChannel.open(payloadPath(chunk.chunkId()), StandardOpenOption.READ)) {
+                        long copied = 0;
+                        while (copied < chunk.chunkLength()) {
+                            long n = in.transferTo(copied, chunk.chunkLength() - copied, out);
+                            if (n <= 0) {
+                                throw new IOException("short read while stitching " + chunk.chunkId());
+                            }
+                            copied += n;
+                        }
+                    }
+                    written += chunk.chunkLength();
+                }
+            }
+            out.force(true);
+        } catch (IOException error) {
+            Files.deleteIfExists(part);
+            throw error;
+        }
+        Files.move(part, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        LOG.infof(
+                "{\"event\":\"jfr_recording_stitched\",\"recording_ids\":\"%s\",\"stitched_bytes\":%d}",
+                String.join(",", recordingIds),
+                written);
+        return written;
+    }
+
+    public long contiguousBytes(List<String> recordingIds) {
+        long total = 0;
+        for (String recordingId : recordingIds) {
+            for (ChunkMetadata chunk : contiguousChunks(recordingId)) {
+                total += chunk.chunkLength();
+            }
+        }
+        return total;
     }
 
     public String podName(String podUid, String stored) {
@@ -190,77 +267,6 @@ public class ChunkStore {
         } catch (IOException error) {
             LOG.warnf(error, "unable to persist pod name for %s", podUid);
         }
-    }
-
-    private void stitch(String recordingId) throws IOException {
-        Object lock = recordingLocks.computeIfAbsent(recordingId, ignored -> new Object());
-        synchronized (lock) {
-            TreeMap<Long, ChunkMetadata> chunks = byRecording.get(recordingId);
-            if (chunks == null || chunks.isEmpty()) {
-                return;
-            }
-            Path dir = recordingDir(recordingId);
-            Files.createDirectories(dir);
-            Path stitched = dir.resolve("stitched.jfr");
-            Path manifestPath = dir.resolve("manifest.json");
-            RecordingManifest manifest = readManifest(manifestPath);
-            if (!Files.exists(stitched)) {
-                Files.createFile(stitched);
-                manifest = new RecordingManifest();
-            }
-            try (FileChannel out = FileChannel.open(stitched, StandardOpenOption.WRITE)) {
-                long size = out.size();
-                if (size != manifest.nextOffset) {
-                    out.truncate(Math.min(size, manifest.nextOffset));
-                }
-                out.position(manifest.nextOffset);
-                boolean wrote = false;
-                while (true) {
-                    ChunkMetadata next = chunks.get(manifest.nextOffset);
-                    if (next == null) {
-                        break;
-                    }
-                    try (FileChannel in = FileChannel.open(payloadPath(next.chunkId()), StandardOpenOption.READ)) {
-                        long copied = 0;
-                        while (copied < next.chunkLength()) {
-                            long n = in.transferTo(copied, next.chunkLength() - copied, out);
-                            if (n <= 0) {
-                                throw new IOException("short read while stitching " + next.chunkId());
-                            }
-                            copied += n;
-                        }
-                    }
-                    if (!manifest.chunkIds.contains(next.chunkId())) {
-                        manifest.chunkIds.add(next.chunkId());
-                    }
-                    manifest.nextOffset += next.chunkLength();
-                    manifest.stitchedBytes = manifest.nextOffset;
-                    wrote = true;
-                }
-                if (wrote) {
-                    out.force(true);
-                }
-            }
-            writeAtomic(manifestPath, MAPPER.writeValueAsBytes(manifest));
-            if (manifest.stitchedBytes > 0) {
-                LOG.infof(
-                        "{\"event\":\"jfr_recording_stitched\",\"recording_id\":\"%s\",\"stitched_bytes\":%d,\"chunks\":%d}",
-                        recordingId,
-                        manifest.stitchedBytes,
-                        manifest.chunkIds.size());
-            }
-        }
-    }
-
-    private RecordingManifest readManifest(Path path) throws IOException {
-        if (!Files.exists(path)) {
-            return new RecordingManifest();
-        }
-        RecordingManifest manifest = MAPPER.readValue(path.toFile(), RecordingManifest.class);
-        if (manifest.chunkIds == null) {
-            manifest.chunkIds = new java.util.ArrayList<>();
-        }
-        return manifest;
     }
 
     private void loadMetaQuietly(Path meta) {
@@ -300,21 +306,24 @@ public class ChunkStore {
         }
     }
 
-    private Path payloadPath(String chunkId) {
-        return chunksDir.resolve(chunkId + ".jfr");
+    private void deleteLegacyStitchedRecordings() throws IOException {
+        if (!Files.exists(recordingsDir)) {
+            return;
+        }
+        Files.walkFileTree(recordingsDir, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                String name = file.getFileName().toString();
+                if (name.equals("stitched.jfr") || name.equals("manifest.json")) {
+                    deleteQuietly(file);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     private Path metaPath(String chunkId) {
         return chunksDir.resolve(chunkId + ".meta");
-    }
-
-    private Path recordingDir(String recordingId) {
-        String[] parts = recordingId.split("/");
-        Path dir = recordingsDir;
-        for (String part : parts) {
-            dir = dir.resolve(safe(part));
-        }
-        return dir;
     }
 
     private void loadIdentities() throws IOException {
@@ -359,7 +368,7 @@ public class ChunkStore {
         Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }
 
-    private static void deleteQuietly(Path path) {
+    static void deleteQuietly(Path path) {
         try {
             Files.deleteIfExists(path);
         } catch (IOException ignored) {
