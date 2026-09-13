@@ -138,35 +138,58 @@ public class RecordingCatalog {
         if (selected.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(openCached(selected, start, stop, from, to, bytes, chunks));
+        Instant needFrom = from.isBefore(coverageStart) ? coverageStart : from;
+        Instant needTo = to.isAfter(coverageStop) ? coverageStop : to;
+        if (needFrom.isAfter(needTo)) {
+            return Optional.empty();
+        }
+        return Optional.of(openCached(
+                selected, dated, start, stop, from, to, needFrom, needTo, bytes, chunks));
     }
 
     public WindowSelection singleFile(IndexedRecording recording) throws IOException {
         JfrTimeRange.TimeSpan span = recording.span();
         return openCached(
                 List.of(recording),
+                List.of(recording),
                 span == null ? null : span.start(),
                 span == null ? null : span.stop(),
                 null,
                 null,
+                span == null ? null : span.start(),
+                span == null ? null : span.stop(),
                 recording.summary().bytes(),
                 recording.summary().chunks());
     }
 
     private WindowSelection openCached(
             List<IndexedRecording> selected,
+            List<IndexedRecording> workloadDated,
             Instant start,
             Instant stop,
             Instant from,
             Instant to,
+            Instant needFrom,
+            Instant needTo,
             long bytes,
             int chunks)
             throws IOException {
         List<String> recordingIds = selected.stream().map(IndexedRecording::recordingId).toList();
-        String key = cacheKey(selected.getFirst().key(), recordingIds);
-        StitchCache.Lease lease = stitchCache.acquire(key, recordingIds);
+        WorkloadKey key = selected.getFirst().key();
+        String workloadKey = workloadCacheKey(key);
+        String cacheKey = cacheKey(key, recordingIds);
+        String fingerprint = dataFingerprint(workloadDated);
+        StitchCache.Lease lease = stitchCache.acquireCovering(
+                cacheKey,
+                workloadKey,
+                recordingIds,
+                needFrom,
+                needTo,
+                start,
+                stop,
+                fingerprint);
         return new WindowSelection(
-                selected.getFirst().key(),
+                key,
                 selected,
                 lease.path(),
                 lease,
@@ -178,14 +201,25 @@ public class RecordingCatalog {
                 chunks);
     }
 
+    static String workloadCacheKey(WorkloadKey key) {
+        return key.namespace() + "|" + key.pod() + "|" + key.container();
+    }
+
     static String cacheKey(WorkloadKey key, List<String> recordingIds) {
-        return key.namespace()
-                + "|"
-                + key.pod()
-                + "|"
-                + key.container()
+        return workloadCacheKey(key)
                 + "|"
                 + recordingIds.stream().collect(Collectors.joining(","));
+    }
+
+    static String dataFingerprint(List<IndexedRecording> dated) {
+        return dated.stream()
+                .sorted(Comparator.comparing(IndexedRecording::recordingId))
+                .map(recording -> recording.recordingId()
+                        + ":"
+                        + recording.summary().bytes()
+                        + ":"
+                        + recording.summary().chunks())
+                .collect(Collectors.joining(","));
     }
 
     List<IndexedRecording> index() {

@@ -16,6 +16,7 @@ import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -27,6 +28,9 @@ import org.jboss.logging.Logger;
 
 /**
  * Bounded on-demand stitch cache under {@code stitch-cache/}. Durable chunks remain in {@link ChunkStore}.
+ *
+ * <p>Entries may be reused across sliding wall-clock windows when the underlying recording set is unchanged
+ * and the cached file's time span still covers the clipped request range.
  */
 public class StitchCache implements Closeable {
     private static final Logger LOG = Logger.getLogger(StitchCache.class);
@@ -88,42 +92,101 @@ public class StitchCache implements Closeable {
     }
 
     /**
-     * Acquire a lease on a stitched JFR for the given recording ids (cache-before-create).
+     * Acquire a lease on a stitched JFR for the given recording ids (exact cache key).
      * Caller must {@link Lease#close()} when done analyzing.
      */
     public Lease acquire(String key, List<String> recordingIds) throws IOException {
-        if (key == null || key.isBlank()) {
+        return acquireCovering(key, key, recordingIds, null, null, null, null, null);
+    }
+
+    /**
+     * Reuse any cached stitch for {@code workloadKey} whose data fingerprint matches and whose span
+     * covers {@code [needFrom, needTo]}; otherwise stitch {@code recordingIds}.
+     */
+    public Lease acquireCovering(
+            String cacheKey,
+            String workloadKey,
+            List<String> recordingIds,
+            Instant needFrom,
+            Instant needTo,
+            Instant stitchStart,
+            Instant stitchStop,
+            String dataFingerprint)
+            throws IOException {
+        if (cacheKey == null || cacheKey.isBlank()) {
             throw new IllegalArgumentException("cache key required");
         }
         if (recordingIds == null || recordingIds.isEmpty()) {
             throw new IllegalArgumentException("recording ids required");
         }
+        List<String> ids = List.copyOf(recordingIds);
         lock.lock();
         try {
-            Entry existing = entries.get(key);
+            if (workloadKey != null && dataFingerprint != null && needFrom != null && needTo != null) {
+                Entry best = null;
+                for (Entry existing : entries.values()) {
+                    if (!Files.isRegularFile(existing.path)) {
+                        continue;
+                    }
+                    if (!Objects.equals(workloadKey, existing.workloadKey)) {
+                        continue;
+                    }
+                    if (!dataFingerprint.equals(existing.fingerprint)) {
+                        continue;
+                    }
+                    if (!existing.covers(needFrom, needTo)) {
+                        continue;
+                    }
+                    if (!existing.recordingIds.containsAll(ids)) {
+                        continue;
+                    }
+                    if (best == null
+                            || existing.recordingIds.size() > best.recordingIds.size()
+                            || (existing.recordingIds.size() == best.recordingIds.size()
+                                    && existing.size > best.size)) {
+                        best = existing;
+                    }
+                }
+                if (best != null) {
+                    best.refcount++;
+                    best.lastUsed = clock.instant();
+                    return new Lease(best.key, best.path);
+                }
+            }
+            Entry existing = entries.get(cacheKey);
             if (existing != null && Files.isRegularFile(existing.path)) {
                 existing.refcount++;
                 existing.lastUsed = clock.instant();
-                return new Lease(key, existing.path);
+                return new Lease(cacheKey, existing.path);
             }
             if (existing != null) {
-                entries.remove(key);
+                entries.remove(cacheKey);
                 ChunkStore.deleteQuietly(existing.path);
             }
-            long needed = store.contiguousBytes(recordingIds);
+            long needed = store.contiguousBytes(ids);
             if (needed <= 0) {
-                throw new IOException("no contiguous chunks to stitch for " + key);
+                throw new IOException("no contiguous chunks to stitch for " + cacheKey);
             }
             makeRoom(needed);
             if (totalBytes() + needed > maxBytes) {
                 throw new IOException("stitch-cache budget exceeded (%d needed, max %d, used %d)"
                         .formatted(needed, maxBytes, totalBytes()));
             }
-            Path target = cacheDir.resolve(fileNameFor(key));
-            long written = store.stitchTo(target, recordingIds);
-            Entry created = new Entry(target, written, clock.instant(), 1);
-            entries.put(key, created);
-            return new Lease(key, target);
+            Path target = cacheDir.resolve(fileNameFor(cacheKey));
+            long written = store.stitchTo(target, ids);
+            Entry created = new Entry(
+                    cacheKey,
+                    workloadKey,
+                    target,
+                    written,
+                    clock.instant(),
+                    1,
+                    ids,
+                    stitchStart,
+                    stitchStop,
+                    dataFingerprint);
+            entries.put(cacheKey, created);
+            return new Lease(cacheKey, target);
         } finally {
             lock.unlock();
         }
@@ -269,16 +332,45 @@ public class StitchCache implements Closeable {
     }
 
     private static final class Entry {
+        private final String key;
+        private final String workloadKey;
         private final Path path;
         private final long size;
+        private final List<String> recordingIds;
+        private final Instant coverStart;
+        private final Instant coverStop;
+        private final String fingerprint;
         private Instant lastUsed;
         private int refcount;
 
-        private Entry(Path path, long size, Instant lastUsed, int refcount) {
+        private Entry(
+                String key,
+                String workloadKey,
+                Path path,
+                long size,
+                Instant lastUsed,
+                int refcount,
+                List<String> recordingIds,
+                Instant coverStart,
+                Instant coverStop,
+                String fingerprint) {
+            this.key = key;
+            this.workloadKey = workloadKey;
             this.path = path;
             this.size = size;
             this.lastUsed = lastUsed;
             this.refcount = refcount;
+            this.recordingIds = recordingIds == null ? List.of() : List.copyOf(recordingIds);
+            this.coverStart = coverStart;
+            this.coverStop = coverStop;
+            this.fingerprint = fingerprint;
+        }
+
+        private boolean covers(Instant needFrom, Instant needTo) {
+            if (coverStart == null || coverStop == null || needFrom == null || needTo == null) {
+                return false;
+            }
+            return !coverStart.isAfter(needFrom) && !coverStop.isBefore(needTo);
         }
     }
 }

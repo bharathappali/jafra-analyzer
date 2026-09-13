@@ -55,6 +55,60 @@ class StitchCacheTest {
     }
 
     @Test
+    void coveringReuseWhenFingerprintUnchangedAndSpanFits(@TempDir Path root) throws Exception {
+        ChunkStore store = new ChunkStore(root);
+        store.recover();
+        persist(store, "a", "rec-a", new byte[] {1, 2});
+        persist(store, "b", "rec-b", new byte[] {3, 4});
+        StitchCache cache = new StitchCache(store, 1024, Duration.ofMinutes(5), Clock.systemUTC(), false);
+        Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        Instant stop = Instant.parse("2026-01-01T01:00:00Z");
+        String fingerprint = "rec-a:2:1,rec-b:2:1";
+
+        Path wide;
+        try (StitchCache.Lease lease = cache.acquireCovering(
+                "ns|pod|c|rec-a,rec-b",
+                "ns|pod|c",
+                List.of("rec-a", "rec-b"),
+                start,
+                stop,
+                start,
+                stop,
+                fingerprint)) {
+            wide = lease.path();
+        }
+        try (StitchCache.Lease narrower = cache.acquireCovering(
+                "ns|pod|c|rec-b",
+                "ns|pod|c",
+                List.of("rec-b"),
+                Instant.parse("2026-01-01T00:30:00Z"),
+                stop,
+                Instant.parse("2026-01-01T00:30:00Z"),
+                stop,
+                fingerprint)) {
+            assertEquals(wide, narrower.path());
+        }
+        // New data changes fingerprint → must stitch again under the narrower key.
+        Path freshPath;
+        try (StitchCache.Lease fresh = cache.acquireCovering(
+                "ns|pod|c|rec-b",
+                "ns|pod|c",
+                List.of("rec-b"),
+                Instant.parse("2026-01-01T00:30:00Z"),
+                stop,
+                Instant.parse("2026-01-01T00:30:00Z"),
+                stop,
+                fingerprint + ",rec-c:1:1")) {
+            freshPath = fresh.path();
+            assertEquals("ns|pod|c|rec-b", fresh.key());
+        }
+        assertTrue(Files.exists(freshPath));
+        assertTrue(Files.exists(wide));
+        assertTrue(!freshPath.equals(wide));
+        cache.close();
+    }
+
+    @Test
     void ttlReaperTrashesUnusedEntry(@TempDir Path root) throws Exception {
         ChunkStore store = new ChunkStore(root);
         store.recover();

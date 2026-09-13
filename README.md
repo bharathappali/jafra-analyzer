@@ -106,12 +106,15 @@ curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/contai
 ```
 
 `last` accepts `5m`, `5mins`, `5 minutes`, `1h`, `1 hour`, `90s`, and `1d`
-(up to 7 days). `from` / `to` / `before` / `after` are ISO-8601 timestamps.
-`from` alone reads through now; `to` alone reads from the earliest stored
-file. Do not combine `last`, `from`/`to`, `before`, and `after`. A valid
-window with no overlapping files returns `404`. The report includes
-`recordings` (the merged files), `start`/`end` (actual coverage), and
-`from`/`to` (the requested window).
+(up to 7 days) and is a wall-clock window ending at request time. The stitch
+cache reuses an existing JFR when no new recordings have arrived and the
+cached file's time span still covers the clipped request range; `/report` and
+`/summary` then filter events to the requested `from`/`to`. Absolute
+`from` / `to` / `before` / `after` are ISO-8601 timestamps. `from` alone reads
+through now; `to` alone reads from the earliest stored file. Do not combine
+`last`, `from`/`to`, `before`, and `after`. A valid window with no overlapping
+files returns `404`. The report includes `recordings` (overlapping files),
+`start`/`end` (their coverage), and `from`/`to` (the requested window).
 
 `GET .../summary` is the raw event companion to `/report`. It does not run JMC
 rules. It groups event types that appear in the recording and returns the
