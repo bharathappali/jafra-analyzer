@@ -100,6 +100,17 @@ class RecordingCatalogTest {
             assertEquals(cached, again.jfr());
         }
 
+        // Wall clock slides; narrower last= still covered by the wider stitch while data is unchanged.
+        Instant laterNow = now.plus(Duration.ofMinutes(3));
+        try (RecordingCatalog.WindowSelection narrower = fixture.catalog.openWindow(
+                        "ns-a", "pod-a", "app", ReportWindow.parse(laterNow, "5m", null, null, null, null))
+                .orElseThrow()) {
+            assertEquals(List.of("profile-2.jfr"), filenames(narrower));
+            assertEquals(cached, narrower.jfr());
+            assertEquals(laterNow.minus(Duration.ofMinutes(5)), narrower.from());
+            assertEquals(laterNow, narrower.to());
+        }
+
         try (RecordingCatalog.WindowSelection ranged = fixture.catalog.openWindow(
                         "ns-a",
                         "pod-a",

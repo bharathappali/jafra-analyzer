@@ -29,6 +29,11 @@ import org.openjdk.jmc.flightrecorder.rules.TypedResult;
 @ApplicationScoped
 public class JfrReportGenerator {
     public Map<String, AnalysisFinding> analyze(Path recording, String filter) throws IOException {
+        return analyze(recording, filter, null, null);
+    }
+
+    public Map<String, AnalysisFinding> analyze(Path recording, String filter, Instant from, Instant to)
+            throws IOException {
         if (recording == null || !Files.exists(recording) || Files.size(recording) == 0) {
             throw new IOException("stitched recording is empty");
         }
@@ -38,6 +43,7 @@ public class JfrReportGenerator {
         } catch (CouldNotLoadRecordingException error) {
             throw new IOException("unable to load JFR: " + error.getMessage(), error);
         }
+        events = JfrTimeFilter.apply(events, from, to);
         ResultProvider results = new ResultProvider();
         Map<String, AnalysisFinding> findings = new LinkedHashMap<>();
         String needle = filter == null ? "" : filter.trim().toLowerCase();

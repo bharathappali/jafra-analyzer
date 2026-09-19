@@ -67,7 +67,8 @@ public class RecordingResource {
             @QueryParam("after") String after) {
         return withSelection(namespace, pod, container, recording, last, from, to, before, after, selection -> {
             try {
-                return reports.report(selection, reports.analyze(selection.jfr(), filter));
+                return reports.report(
+                        selection, reports.analyze(selection.jfr(), filter, selection.from(), selection.to()));
             } catch (IOException error) {
                 throw unavailable(selection, error.getMessage());
             }
@@ -108,7 +109,8 @@ public class RecordingResource {
             @QueryParam("filter") String filter) {
         return withSelection(namespace, pod, container, filename, null, null, null, null, null, selection -> {
             try {
-                return reports.report(selection, reports.analyze(selection.jfr(), filter));
+                return reports.report(
+                        selection, reports.analyze(selection.jfr(), filter, selection.from(), selection.to()));
             } catch (IOException error) {
                 throw unavailable(selection, error.getMessage());
             }

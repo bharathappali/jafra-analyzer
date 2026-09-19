@@ -56,6 +56,7 @@ public class JfrEventSummarizer {
         } catch (CouldNotLoadRecordingException error) {
             throw new IOException("unable to load JFR: " + error.getMessage(), error);
         }
+        events = JfrTimeFilter.apply(events, selection.from(), selection.to());
         String needle = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
         Map<String, EventSummary> byType = summarizeEvents(events, needle);
         Map<String, TopicSummary> topics = summarizeTopics(byType);
