@@ -2,10 +2,7 @@ package io.jafra.analyzer.recordings;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -15,6 +12,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -25,15 +23,18 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import io.jafra.analyzer.storage.ChunkMetadata;
 import io.jafra.analyzer.storage.ChunkStore;
 import io.jafra.analyzer.storage.RecordingManifest;
+import io.jafra.analyzer.storage.StitchCache;
 
 @ApplicationScoped
 public class RecordingCatalog {
     private final ChunkStore store;
+    private final StitchCache stitchCache;
     private final ConcurrentHashMap<String, CachedSpan> timeCache = new ConcurrentHashMap<>();
 
     @Inject
-    public RecordingCatalog(ChunkStore store) {
+    public RecordingCatalog(ChunkStore store, StitchCache stitchCache) {
         this.store = store;
+        this.stitchCache = stitchCache;
     }
 
     public RecordingListResponse list(String namespace, String pod, String container) {
@@ -137,33 +138,88 @@ public class RecordingCatalog {
         if (selected.isEmpty()) {
             return Optional.empty();
         }
-        Merge merge = concatenate(selected);
-        return Optional.of(new WindowSelection(
-                selected.getFirst().key(),
+        Instant needFrom = from.isBefore(coverageStart) ? coverageStart : from;
+        Instant needTo = to.isAfter(coverageStop) ? coverageStop : to;
+        if (needFrom.isAfter(needTo)) {
+            return Optional.empty();
+        }
+        return Optional.of(openCached(
+                selected, dated, start, stop, from, to, needFrom, needTo, bytes, chunks));
+    }
+
+    public WindowSelection singleFile(IndexedRecording recording) throws IOException {
+        JfrTimeRange.TimeSpan span = recording.span();
+        return openCached(
+                List.of(recording),
+                List.of(recording),
+                span == null ? null : span.start(),
+                span == null ? null : span.stop(),
+                null,
+                null,
+                span == null ? null : span.start(),
+                span == null ? null : span.stop(),
+                recording.summary().bytes(),
+                recording.summary().chunks());
+    }
+
+    private WindowSelection openCached(
+            List<IndexedRecording> selected,
+            List<IndexedRecording> workloadDated,
+            Instant start,
+            Instant stop,
+            Instant from,
+            Instant to,
+            Instant needFrom,
+            Instant needTo,
+            long bytes,
+            int chunks)
+            throws IOException {
+        List<String> recordingIds = selected.stream().map(IndexedRecording::recordingId).toList();
+        WorkloadKey key = selected.getFirst().key();
+        String workloadKey = workloadCacheKey(key);
+        String cacheKey = cacheKey(key, recordingIds);
+        String fingerprint = dataFingerprint(workloadDated);
+        StitchCache.Lease lease = stitchCache.acquireCovering(
+                cacheKey,
+                workloadKey,
+                recordingIds,
+                needFrom,
+                needTo,
+                start,
+                stop,
+                fingerprint);
+        return new WindowSelection(
+                key,
                 selected,
-                merge.path(),
-                merge.temporary(),
+                lease.path(),
+                lease,
                 start,
                 stop,
                 from,
                 to,
                 bytes,
-                chunks));
+                chunks);
     }
 
-    public WindowSelection singleFile(IndexedRecording recording) {
-        JfrTimeRange.TimeSpan span = recording.span();
-        return new WindowSelection(
-                recording.key(),
-                List.of(recording),
-                recording.stitched(),
-                false,
-                span == null ? null : span.start(),
-                span == null ? null : span.stop(),
-                null,
-                null,
-                recording.summary().bytes(),
-                recording.summary().chunks());
+    static String workloadCacheKey(WorkloadKey key) {
+        return key.namespace() + "|" + key.pod() + "|" + key.container();
+    }
+
+    static String cacheKey(WorkloadKey key, List<String> recordingIds) {
+        return workloadCacheKey(key)
+                + "|"
+                + recordingIds.stream().collect(Collectors.joining(","));
+    }
+
+    static String dataFingerprint(List<IndexedRecording> dated) {
+        return dated.stream()
+                .sorted(Comparator.comparing(IndexedRecording::recordingId))
+                .map(recording -> recording.recordingId()
+                        + ":"
+                        + recording.summary().bytes()
+                        + ":"
+                        + recording.summary().chunks())
+                .collect(Collectors.joining(","));
     }
 
     List<IndexedRecording> index() {
@@ -177,21 +233,13 @@ public class RecordingCatalog {
             if (podName == null || podName.isBlank()) {
                 continue;
             }
-            Path stitched = store.stitchedFile(recordingId);
             RecordingManifest manifest = store.manifest(recordingId);
             long bytes = manifest.stitchedBytes;
-            if (bytes == 0 && Files.exists(stitched)) {
-                try {
-                    bytes = Files.size(stitched);
-                } catch (Exception ignored) {
-                    bytes = 0;
-                }
-            }
             if (bytes <= 0) {
                 continue;
             }
             String filename = sample.physicalFilename();
-            JfrTimeRange.TimeSpan span = resolveTimes(recordingId, stitched);
+            JfrTimeRange.TimeSpan span = resolveTimes(recordingId);
             RecordingSummary summary = new RecordingSummary(
                     filename,
                     fileSequence(filename),
@@ -203,7 +251,6 @@ public class RecordingCatalog {
             recordings.add(new IndexedRecording(
                     new WorkloadKey(sample.namespace(), podName, sample.containerName()),
                     recordingId,
-                    stitched,
                     summary,
                     span));
         }
@@ -216,57 +263,30 @@ public class RecordingCatalog {
         return recordings;
     }
 
-    private JfrTimeRange.TimeSpan resolveTimes(String recordingId, Path stitched) {
-        long size = 0;
-        long mtime = 0;
-        try {
-            if (Files.exists(stitched)) {
-                size = Files.size(stitched);
-                mtime = Files.getLastModifiedTime(stitched).toMillis();
-            }
-        } catch (IOException ignored) {
-            return JfrTimeRange.ofChunks(store.chunks(recordingId));
-        }
+    private JfrTimeRange.TimeSpan resolveTimes(String recordingId) {
+        List<ChunkMetadata> contiguous = store.contiguousChunks(recordingId);
+        long fingerprint = contiguous.stream().mapToLong(ChunkMetadata::chunkLength).sum();
+        fingerprint = fingerprint * 31 + contiguous.size();
         CachedSpan cached = timeCache.get(recordingId);
-        if (cached != null && cached.size() == size && cached.mtime() == mtime) {
+        if (cached != null && cached.fingerprint() == fingerprint) {
             return cached.span();
         }
-        JfrTimeRange.TimeSpan span = JfrTimeRange.ofFile(stitched);
+        JfrTimeRange.TimeSpan span = JfrTimeRange.ofChunks(contiguous);
         if (span == null) {
-            span = JfrTimeRange.ofChunks(store.chunks(recordingId));
-        }
-        timeCache.put(recordingId, new CachedSpan(size, mtime, span));
-        return span;
-    }
-
-    private static Merge concatenate(List<IndexedRecording> recordings) throws IOException {
-        if (recordings.size() == 1) {
-            return new Merge(recordings.getFirst().stitched(), false);
-        }
-        Path merged = Files.createTempFile("jafra-window-", ".jfr");
-        try (FileChannel out = FileChannel.open(
-                merged,
-                StandardOpenOption.WRITE,
-                StandardOpenOption.TRUNCATE_EXISTING)) {
-            for (IndexedRecording recording : recordings) {
-                try (FileChannel in = FileChannel.open(recording.stitched(), StandardOpenOption.READ)) {
-                    long copied = 0;
-                    long size = in.size();
-                    while (copied < size) {
-                        long n = in.transferTo(copied, size - copied, out);
-                        if (n <= 0) {
-                            throw new IOException("short read while merging " + recording.summary().filename());
-                        }
-                        copied += n;
-                    }
+            Instant start = null;
+            Instant stop = null;
+            for (ChunkMetadata chunk : contiguous) {
+                JfrTimeRange.TimeSpan fromFile = JfrTimeRange.ofFile(store.payloadPath(chunk.chunkId()));
+                if (fromFile == null) {
+                    continue;
                 }
+                start = start == null || fromFile.start().isBefore(start) ? fromFile.start() : start;
+                stop = stop == null || fromFile.stop().isAfter(stop) ? fromFile.stop() : stop;
             }
-            out.force(true);
-        } catch (IOException error) {
-            Files.deleteIfExists(merged);
-            throw error;
+            span = JfrTimeRange.TimeSpan.of(start, stop);
         }
-        return new Merge(merged, true);
+        timeCache.put(recordingId, new CachedSpan(fingerprint, span));
+        return span;
     }
 
     private static boolean matches(IndexedRecording recording, String namespace, String pod, String container) {
@@ -313,7 +333,6 @@ public class RecordingCatalog {
     public record IndexedRecording(
             WorkloadKey key,
             String recordingId,
-            Path stitched,
             RecordingSummary summary,
             JfrTimeRange.TimeSpan span) {}
 
@@ -336,7 +355,7 @@ public class RecordingCatalog {
             WorkloadKey key,
             List<IndexedRecording> recordings,
             Path jfr,
-            boolean temporary,
+            StitchCache.Lease lease,
             Instant start,
             Instant stop,
             Instant from,
@@ -346,16 +365,16 @@ public class RecordingCatalog {
             implements Closeable {
         @Override
         public void close() {
-            if (temporary && jfr != null) {
-                try {
-                    Files.deleteIfExists(jfr);
-                } catch (IOException ignored) {
-                }
+            if (lease != null) {
+                lease.close();
             }
+        }
+
+        /** @deprecated use lease lifecycle; always false for stitch-cache entries. */
+        public boolean temporary() {
+            return false;
         }
     }
 
-    private record CachedSpan(long size, long mtime, JfrTimeRange.TimeSpan span) {}
-
-    private record Merge(Path path, boolean temporary) {}
+    private record CachedSpan(long fingerprint, JfrTimeRange.TimeSpan span) {}
 }

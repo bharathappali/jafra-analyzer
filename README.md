@@ -1,9 +1,10 @@
 # Jafra Analyzer
 
-`jafra-analyzer` version `0.0.1` is a Quarkus gRPC receiver. It validates
+`jafra-analyzer` version `0.0.2` is a Quarkus gRPC receiver. It validates
 chunk streams, persists each accepted chunk on the 5 GiB PVC at
-`/var/lib/jafra/analyzer`, stitches contiguous chunks into a per-recording
-JFR file, and serves automated analysis summaries over HTTP.
+`/var/lib/jafra/analyzer`, and serves automated analysis summaries over HTTP.
+Contiguous chunks are stitched on demand into a bounded `stitch-cache/` for
+`/report` and `/summary` (not kept as a second durable copy).
 
 Durable identity is the presence of `chunks/<chunkId>.meta` after a checksum
 match. The agent can retry or the analyzer can restart; the same chunk ID
@@ -15,23 +16,26 @@ after that metadata file is durable.
 ```text
 /var/lib/jafra/analyzer/
   tmp/<chunkId>.part                 # in-flight frames; discarded on abort/recover
-  chunks/<chunkId>.jfr               # committed payload
+  chunks/<chunkId>.jfr               # committed payload (durable)
   chunks/<chunkId>.meta              # durable identity
-  recordings/<cluster>/<podUID>/<container>/<file>/
-    stitched.jfr                     # contiguous chunks from offset 0
-    manifest.json                    # next expected offset
+  stitch-cache/<hash>.jfr            # on-demand analysis JFRs (TTL + ~1–2 Gi budget)
   identities/<podUID>.json           # namespace + pod name for HTTP queries
 ```
 
 Incomplete `.part` files and payload files without `.meta` are deleted on
-startup. Out-of-order chunks stay on disk until the hole at offset 0 is
-filled, then stitching appends the contiguous prefix.
+startup. Legacy `recordings/**/stitched.jfr` files are removed on recover.
+Out-of-order chunks stay on disk until the hole at offset 0 is filled; only
+the contiguous prefix is available to stitch into the cache.
+
+The stitch-cache reaper deletes unused entries after TTL (default 2 minutes)
+or when the cache exceeds `jafra.storage.stitch-cache.max-bytes` (default 2 Gi).
+It never deletes `chunks/`.
 
 ## Build
 
 ```bash
 mvn -f jafra-analyzer/pom.xml test
-docker build -f jafra-analyzer/Dockerfile -t quay.io/bharathappali/jafra-analyzer:0.0.1 .
+docker build -f jafra-analyzer/Dockerfile -t quay.io/bharathappali/jafra-analyzer:0.0.2 .
 ```
 
 Build the container from the repository root. Protobuf code is generated from
@@ -41,7 +45,7 @@ required.
 ## Deploy
 
 ```bash
-kind load docker-image quay.io/bharathappali/jafra-analyzer:0.0.1 --name jafra
+kind load docker-image quay.io/bharathappali/jafra-analyzer:0.0.2 --name jafra
 kubectl apply -f deploy/analyzer/deployment.yaml
 kubectl rollout status deployment/jafra-analyzer -n jafra-system
 kubectl logs -n jafra-system deployment/jafra-analyzer
@@ -49,11 +53,11 @@ kubectl exec -n jafra-system deploy/jafra-analyzer -- ls -la /var/lib/jafra/anal
 ```
 
 Restart the analyzer and confirm previously accepted IDs stay `DUPLICATE`
-while `stitched.jfr` remains.
+(chunks remain; stitch-cache may be empty until the next `/report`).
 
 Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 `GET /q/health`, `GET /q/metrics`). Status includes `durableChunks` and
-`stitchedBytes`.
+`stitchedBytes` (current stitch-cache size).
 
 ## Summary APIs
 
@@ -102,12 +106,15 @@ curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/contai
 ```
 
 `last` accepts `5m`, `5mins`, `5 minutes`, `1h`, `1 hour`, `90s`, and `1d`
-(up to 7 days). `from` / `to` / `before` / `after` are ISO-8601 timestamps.
-`from` alone reads through now; `to` alone reads from the earliest stored
-file. Do not combine `last`, `from`/`to`, `before`, and `after`. A valid
-window with no overlapping files returns `404`. The report includes
-`recordings` (the merged files), `start`/`end` (actual coverage), and
-`from`/`to` (the requested window).
+(up to 7 days) and is a wall-clock window ending at request time. The stitch
+cache reuses an existing JFR when no new recordings have arrived and the
+cached file's time span still covers the clipped request range; `/report` and
+`/summary` then filter events to the requested `from`/`to`. Absolute
+`from` / `to` / `before` / `after` are ISO-8601 timestamps. `from` alone reads
+through now; `to` alone reads from the earliest stored file. Do not combine
+`last`, `from`/`to`, `before`, and `after`. A valid window with no overlapping
+files returns `404`. The report includes `recordings` (overlapping files),
+`start`/`end` (their coverage), and `from`/`to` (the requested window).
 
 `GET .../summary` is the raw event companion to `/report`. It does not run JMC
 rules. It groups event types that appear in the recording and returns the

@@ -24,7 +24,7 @@ class ReportWindowTest {
     }
 
     @Test
-    void lastUsesClockWindow() {
+    void lastUsesWallClockWindow() {
         ReportWindow window = ReportWindow.parse(NOW, "5m", null, null, null, null);
         assertEquals(NOW.minus(Duration.ofMinutes(5)), window.from());
         assertEquals(NOW, window.to());

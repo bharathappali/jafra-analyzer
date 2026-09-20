@@ -49,38 +49,39 @@ class JfrEventSummarizerTest {
     @Test
     void summaryReadsCpuTypeFromJfrAndSkipsAddresses() throws Exception {
         persist("sum-cpu", "sum-jfr", "sum-pod", "sum-container", "profile-1.jfr", dumpBusyRecording());
-        var document = summarizer.summarize(
-                catalog.singleFile(catalog.requireRecording("sum-jfr", "sum-pod", "sum-container", "profile-1.jfr")),
-                null);
+        try (var selection =
+                catalog.singleFile(catalog.requireRecording("sum-jfr", "sum-pod", "sum-container", "profile-1.jfr"))) {
+            var document = summarizer.summarize(selection, null);
 
-        assertFalse(document.events().isEmpty());
-        document.events().values().forEach(event -> {
-            assertTrue(event.count() > 0, event.name());
-            event.fields().forEach((name, stats) -> {
-                assertFalse(name.contains("eventType") || name.equals("(eventType)"), name);
-                if (stats.values() != null) {
-                    stats.values().forEach(value ->
-                            assertFalse(value.startsWith("Type(") && value.endsWith(")"), value));
-                }
-                assertFalse(name.toLowerCase().contains("address"), name);
-                assertFalse(name.equalsIgnoreCase("gcId"), name);
-                if (stats.values() == null) {
-                    assertFalse(isHugePointer(stats.min()), name);
-                    assertFalse(isHugePointer(stats.max()), name);
-                    assertFalse(isHugePointer(stats.sum()), name);
-                }
+            assertFalse(document.events().isEmpty());
+            document.events().values().forEach(event -> {
+                assertTrue(event.count() > 0, event.name());
+                event.fields().forEach((name, stats) -> {
+                    assertFalse(name.contains("eventType") || name.equals("(eventType)"), name);
+                    if (stats.values() != null) {
+                        stats.values().forEach(value ->
+                                assertFalse(value.startsWith("Type(") && value.endsWith(")"), value));
+                    }
+                    assertFalse(name.toLowerCase().contains("address"), name);
+                    assertFalse(name.equalsIgnoreCase("gcId"), name);
+                    if (stats.values() == null) {
+                        assertFalse(isHugePointer(stats.min()), name);
+                        assertFalse(isHugePointer(stats.max()), name);
+                        assertFalse(isHugePointer(stats.sum()), name);
+                    }
+                });
             });
-        });
-        document.topics().values().forEach(topic -> {
-            assertFalse(topic.stats().containsKey("CPU_TYPE"));
-            assertFalse(topic.stats().containsKey("BASE_ADDRESS"));
-            assertFalse(topic.stats().containsKey("ALLOCATION_TOTAL"));
-        });
+            document.topics().values().forEach(topic -> {
+                assertFalse(topic.stats().containsKey("CPU_TYPE"));
+                assertFalse(topic.stats().containsKey("BASE_ADDRESS"));
+                assertFalse(topic.stats().containsKey("ALLOCATION_TOTAL"));
+            });
 
-        var cpu = document.events().get("jdk.CPUInformation");
-        if (cpu != null && cpu.fields().containsKey("cpu")) {
-            List<String> values = cpu.fields().get("cpu").values();
-            assertFalse(values == null || values.isEmpty());
+            var cpu = document.events().get("jdk.CPUInformation");
+            if (cpu != null && cpu.fields().containsKey("cpu")) {
+                List<String> values = cpu.fields().get("cpu").values();
+                assertFalse(values == null || values.isEmpty());
+            }
         }
     }
 
