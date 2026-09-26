@@ -6,30 +6,28 @@ chunk streams, persists each accepted chunk on the 5 GiB PVC at
 Contiguous chunks are stitched on demand into a bounded `stitch-cache/` for
 `/report` and `/summary` (not kept as a second durable copy).
 
-Durable identity is the presence of `chunks/<chunkId>.meta` after a checksum
-match. The agent can retry or the analyzer can restart; the same chunk ID
-returns `DUPLICATE` and is not written again. `ACCEPTED` is returned only
-after that metadata file is durable.
+Durable identity is the chunk id in the file name, the same id the agent already sends. The agent can retry or the analyzer can restart; the same chunk id returns `DUPLICATE` and is not written again. `ACCEPTED` is returned only after the meta file is durable.
 
 ## PVC layout
 
 ```text
 /var/lib/jafra/analyzer/
-  tmp/<chunkId>.part                 # in-flight frames; discarded on abort/recover
-  chunks/<chunkId>.jfr               # committed payload (durable)
-  chunks/<chunkId>.meta              # durable identity
-  stitch-cache/<hash>.jfr            # on-demand analysis JFRs (TTL + ~1–2 Gi budget)
-  identities/<podUID>.json           # namespace + pod name for HTTP queries
+  tmp/<chunkId>.part                              # in-flight frames; discarded on abort/recover
+  data/<4-hour>/<search>-<chunkId>                # committed payload (durable)
+  meta/<4-hour>/<search>-<chunkId>                # same name as the payload
+  stitch-cache/<hash>.jfr                         # on-demand analysis JFRs (TTL + ~1–2 Gi budget)
+  identities/<podUID>.json                        # namespace + pod name for HTTP queries
 ```
 
-Incomplete `.part` files and payload files without `.meta` are deleted on
-startup. Legacy `recordings/**/stitched.jfr` files are removed on recover.
-Out-of-order chunks stay on disk until the hole at offset 0 is filled; only
-the contiguous prefix is available to stitch into the cache.
+`<search>` is 60 characters: start and end time in seconds (8 hex digits each), then namespace, pod name, and container as the first three and last three letters written in hex, then the first 8 characters of the pod uid. `<chunkId>` is the existing duplicate key. The 4-hour folder is `startSeconds / 14400`, also 8 hex digits. The same name is used in `data/` and `meta/`.
 
-The stitch-cache reaper deletes unused entries after TTL (default 2 minutes)
-or when the cache exceeds `jafra.storage.stitch-cache.max-bytes` (default 2 Gi).
-It never deletes `chunks/`.
+A query opens the 4-hour folders, lists names, and keeps files whose name matches the requested time, namespace, pod, and container. It opens meta only for those files. Startup does not load every meta into memory.
+
+Files left in the old `chunks/<chunkId>.jfr` and `chunks/<chunkId>.meta` layout are moved into `data/` and `meta/` on startup. A payload with no meta is deleted. The move reads the JFR header once when the old meta has no start time.
+
+Out-of-order chunks stay on disk until the hole at offset 0 is filled; only the contiguous prefix is available to stitch into the cache.
+
+The stitch-cache reaper deletes unused entries after TTL (default 2 minutes) or when the cache exceeds `jafra.storage.stitch-cache.max-bytes` (default 2 Gi). It never deletes `data/` or `meta/`.
 
 ## Build
 
@@ -53,7 +51,7 @@ kubectl exec -n jafra-system deploy/jafra-analyzer -- ls -la /var/lib/jafra/anal
 ```
 
 Restart the analyzer and confirm previously accepted IDs stay `DUPLICATE`
-(chunks remain; stitch-cache may be empty until the next `/report`).
+(payloads remain under `data/`; stitch-cache may be empty until the next `/report`).
 
 Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 `GET /q/health`, `GET /q/metrics`). Status includes `durableChunks` and

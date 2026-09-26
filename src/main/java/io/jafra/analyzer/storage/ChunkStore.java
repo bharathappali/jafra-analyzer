@@ -32,16 +32,23 @@ public class ChunkStore {
     private final Path root;
     private final Path tmpDir;
     private final Path chunksDir;
+    private final Path dataDir;
+    private final Path metaDir;
     private final Path recordingsDir;
     private final Path identitiesDir;
     private final Map<String, ChunkMetadata> committed = new ConcurrentHashMap<>();
     private final Map<String, TreeMap<Long, ChunkMetadata>> byRecording = new ConcurrentHashMap<>();
     private final Map<String, String> podNames = new ConcurrentHashMap<>();
+    private final Map<String, Path> payloadPaths = new ConcurrentHashMap<>();
+    private final Map<String, Path> metaPaths = new ConcurrentHashMap<>();
+    private final Set<String> chunkIds = ConcurrentHashMap.newKeySet();
 
     public ChunkStore(Path root) {
         this.root = root;
         this.tmpDir = root.resolve("tmp");
         this.chunksDir = root.resolve("chunks");
+        this.dataDir = root.resolve("data");
+        this.metaDir = root.resolve("meta");
         this.recordingsDir = root.resolve("recordings");
         this.identitiesDir = root.resolve("identities");
     }
@@ -53,23 +60,27 @@ public class ChunkStore {
     public void recover() throws IOException {
         Files.createDirectories(tmpDir);
         Files.createDirectories(chunksDir);
+        Files.createDirectories(dataDir);
+        Files.createDirectories(metaDir);
         Files.createDirectories(recordingsDir);
         Files.createDirectories(identitiesDir);
-        deleteOrphans();
-        deleteLegacyStitchedRecordings();
+        deleteTmpParts();
         committed.clear();
         byRecording.clear();
         podNames.clear();
+        payloadPaths.clear();
+        metaPaths.clear();
+        chunkIds.clear();
         loadIdentities();
-        try (Stream<Path> files = Files.list(chunksDir)) {
-            files.filter(path -> path.getFileName().toString().endsWith(".meta"))
-                    .forEach(this::loadMetaQuietly);
-        }
-        LOG.infof("recovered %d durable chunks under %s", committed.size(), root);
+        migrateLegacyChunks();
+        deleteOrphanPayloads();
+        deleteLegacyStitchedRecordings();
+        indexStoredNames();
+        LOG.infof("recovered %d durable chunks under %s", chunkIds.size(), root);
     }
 
     public boolean contains(String chunkId) {
-        return committed.containsKey(chunkId);
+        return chunkIds.contains(chunkId);
     }
 
     public Set<String> committedIds() {
@@ -77,12 +88,20 @@ public class ChunkStore {
     }
 
     public int durableChunkCount() {
-        return committed.size();
+        return chunkIds.size();
     }
 
     /** Bytes of durable chunk payloads (not stitch-cache). */
     public long chunksBytes() {
-        return committed.values().stream().mapToLong(ChunkMetadata::chunkLength).sum();
+        long total = 0;
+        for (Path payload : payloadPaths.values()) {
+            try {
+                total += Files.size(payload);
+            } catch (IOException ignored) {
+                // A missing file is not counted.
+            }
+        }
+        return total;
     }
 
     /**
@@ -115,9 +134,15 @@ public class ChunkStore {
     public void commit(IncomingWrite incoming, ChunkMetadata metadata) throws IOException {
         incoming.force();
         incoming.closeQuietly();
-        Path payload = payloadPath(metadata.chunkId());
+        Path payload = dataFile(metadata);
+        Path meta = metaFile(metadata);
+        Files.createDirectories(payload.getParent());
+        Files.createDirectories(meta.getParent());
         Files.move(incoming.part, payload, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        writeAtomic(metaPath(metadata.chunkId()), MAPPER.writeValueAsBytes(metadata));
+        writeAtomic(meta, MAPPER.writeValueAsBytes(metadata));
+        chunkIds.add(metadata.chunkId());
+        payloadPaths.put(metadata.chunkId(), payload);
+        metaPaths.put(metadata.chunkId(), meta);
         committed.put(metadata.chunkId(), metadata);
         byRecording.computeIfAbsent(metadata.recordingId(), ignored -> new TreeMap<>())
                 .put(metadata.chunkOffset(), metadata);
@@ -131,7 +156,65 @@ public class ChunkStore {
     }
 
     public Path payloadPath(String chunkId) {
+        Path known = payloadPaths.get(chunkId);
+        if (known != null) {
+            return known;
+        }
         return chunksDir.resolve(chunkId + ".jfr");
+    }
+
+    /** Names already on disk. Parsing the name does not open the meta file. */
+    public List<StoredChunk> storedChunks() {
+        List<StoredChunk> stored = new ArrayList<>();
+        if (!Files.isDirectory(metaDir)) {
+            return stored;
+        }
+        try (Stream<Path> buckets = Files.list(metaDir)) {
+            for (Path bucket : buckets.filter(Files::isDirectory).toList()) {
+                try (Stream<Path> files = Files.list(bucket)) {
+                    for (Path meta : files.toList()) {
+                        ChunkFileName.Parsed parsed = ChunkFileName.parse(meta.getFileName().toString());
+                        if (parsed == null) {
+                            continue;
+                        }
+                        Path payload = dataDir.resolve(bucket.getFileName()).resolve(meta.getFileName());
+                        if (!Files.isRegularFile(payload)) {
+                            continue;
+                        }
+                        stored.add(new StoredChunk(parsed, payload, meta));
+                    }
+                }
+            }
+        } catch (IOException error) {
+            LOG.warnf(error, "unable to list stored chunks under %s", metaDir);
+        }
+        return stored;
+    }
+
+    public ChunkMetadata readMeta(StoredChunk stored) {
+        if (stored == null) {
+            return null;
+        }
+        ChunkMetadata cached = committed.get(stored.parsed().chunkId());
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            return MAPPER.readValue(stored.meta().toFile(), ChunkMetadata.class);
+        } catch (IOException error) {
+            LOG.warnf(error, "skipping unreadable chunk metadata %s", stored.meta());
+            return null;
+        }
+    }
+
+    /** Remember meta that a query already selected, so stitching can order that recording. */
+    public void absorb(ChunkMetadata metadata) {
+        if (metadata == null || metadata.chunkId() == null || metadata.recordingId() == null) {
+            return;
+        }
+        committed.put(metadata.chunkId(), metadata);
+        byRecording.computeIfAbsent(metadata.recordingId(), ignored -> new TreeMap<>())
+                .put(metadata.chunkOffset(), metadata);
     }
 
     public Set<String> recordingIds() {
@@ -156,6 +239,9 @@ public class ChunkStore {
 
     /** Contiguous chunks from offset 0 for a physical recording (holes stop the prefix). */
     public List<ChunkMetadata> contiguousChunks(String recordingId) {
+        if (!byRecording.containsKey(recordingId)) {
+            loadRecording(recordingId);
+        }
         TreeMap<Long, ChunkMetadata> chunks = byRecording.get(recordingId);
         if (chunks == null || chunks.isEmpty()) {
             return List.of();
@@ -269,31 +355,128 @@ public class ChunkStore {
         }
     }
 
-    private void loadMetaQuietly(Path meta) {
-        try {
-            ChunkMetadata metadata = MAPPER.readValue(meta.toFile(), ChunkMetadata.class);
-            if (metadata.chunkId() == null || !Files.exists(payloadPath(metadata.chunkId()))) {
-                Files.deleteIfExists(meta);
-                return;
+    private void loadRecording(String recordingId) {
+        for (StoredChunk stored : storedChunks()) {
+            ChunkMetadata metadata = readMeta(stored);
+            if (metadata != null && recordingId.equals(metadata.recordingId())) {
+                absorb(metadata);
             }
-            committed.put(metadata.chunkId(), metadata);
-            byRecording.computeIfAbsent(metadata.recordingId(), ignored -> new TreeMap<>())
-                    .put(metadata.chunkOffset(), metadata);
-            if (metadata.podName() != null && !metadata.podName().isBlank()) {
-                podNames.putIfAbsent(metadata.podUid(), metadata.podName());
-            }
-        } catch (IOException error) {
-            LOG.warnf(error, "skipping unreadable chunk metadata %s", meta);
         }
     }
 
-    private void deleteOrphans() throws IOException {
-        if (Files.exists(tmpDir)) {
-            try (Stream<Path> parts = Files.list(tmpDir)) {
-                parts.filter(path -> path.getFileName().toString().endsWith(".part")).forEach(ChunkStore::deleteQuietly);
+    private void indexStoredNames() {
+        for (StoredChunk stored : storedChunks()) {
+            chunkIds.add(stored.parsed().chunkId());
+            payloadPaths.put(stored.parsed().chunkId(), stored.payload());
+            metaPaths.put(stored.parsed().chunkId(), stored.meta());
+        }
+    }
+
+    private void migrateLegacyChunks() throws IOException {
+        if (!Files.isDirectory(chunksDir)) {
+            return;
+        }
+        List<Path> metas;
+        try (Stream<Path> files = Files.list(chunksDir)) {
+            metas = files.filter(path -> path.getFileName().toString().endsWith(".meta")).toList();
+        }
+        for (Path meta : metas) {
+            migrateOne(meta);
+        }
+    }
+
+    private void migrateOne(Path meta) {
+        try {
+            ChunkMetadata metadata = MAPPER.readValue(meta.toFile(), ChunkMetadata.class);
+            if (metadata.chunkId() == null) {
+                deleteQuietly(meta);
+                return;
+            }
+            Path legacyPayload = chunksDir.resolve(metadata.chunkId() + ".jfr");
+            if (!Files.isRegularFile(legacyPayload)) {
+                deleteQuietly(meta);
+                return;
+            }
+            ChunkMetadata named = withSearchTimes(metadata, legacyPayload);
+            Path payload = dataFile(named);
+            Path metaTarget = metaFile(named);
+            if (!payload.equals(legacyPayload)) {
+                Files.createDirectories(payload.getParent());
+                Files.createDirectories(metaTarget.getParent());
+                Files.move(legacyPayload, payload, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                writeAtomic(metaTarget, MAPPER.writeValueAsBytes(named));
+                deleteQuietly(meta);
+            }
+        } catch (IOException error) {
+            LOG.warnf(error, "skipping legacy chunk metadata %s", meta);
+        }
+    }
+
+    private ChunkMetadata withSearchTimes(ChunkMetadata metadata, Path payload) {
+        long startNs = metadata.chunkStartTimeNs();
+        long durationNs = metadata.chunkDurationNs();
+        if (startNs <= 0) {
+            long[] times = JfrHeaderTimes.read(payload);
+            if (times != null) {
+                startNs = times[0];
+                durationNs = times[1];
             }
         }
-        if (!Files.exists(chunksDir)) {
+        String pod = podName(metadata.podUid(), metadata.podName());
+        return new ChunkMetadata(
+                metadata.chunkId(),
+                metadata.recordingId(),
+                metadata.clusterId(),
+                metadata.namespace(),
+                metadata.podUid(),
+                pod,
+                metadata.containerName(),
+                metadata.physicalFilename(),
+                metadata.chunkOffset(),
+                metadata.chunkLength(),
+                metadata.checksum(),
+                startNs,
+                durationNs);
+    }
+
+    private Path dataFile(ChunkMetadata metadata) {
+        return dataDir.resolve(ChunkFileName.bucket(metadata)).resolve(ChunkFileName.fileName(metadata));
+    }
+
+    private Path metaFile(ChunkMetadata metadata) {
+        return metaDir.resolve(ChunkFileName.bucket(metadata)).resolve(ChunkFileName.fileName(metadata));
+    }
+
+    private void deleteTmpParts() throws IOException {
+        if (!Files.exists(tmpDir)) {
+            return;
+        }
+        try (Stream<Path> parts = Files.list(tmpDir)) {
+            parts.filter(path -> path.getFileName().toString().endsWith(".part")).forEach(ChunkStore::deleteQuietly);
+        }
+    }
+
+    private void deleteOrphanPayloads() throws IOException {
+        deleteLegacyChunkOrphans();
+        if (!Files.isDirectory(dataDir)) {
+            return;
+        }
+        try (Stream<Path> buckets = Files.list(dataDir)) {
+            for (Path bucket : buckets.filter(Files::isDirectory).toList()) {
+                try (Stream<Path> files = Files.list(bucket)) {
+                    for (Path payload : files.toList()) {
+                        Path meta = metaDir.resolve(bucket.getFileName()).resolve(payload.getFileName());
+                        if (!Files.exists(meta)) {
+                            deleteQuietly(payload);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private void deleteLegacyChunkOrphans() throws IOException {
+        if (!Files.isDirectory(chunksDir)) {
             return;
         }
         try (Stream<Path> files = Files.list(chunksDir)) {
@@ -320,10 +503,6 @@ public class ChunkStore {
                 return FileVisitResult.CONTINUE;
             }
         });
-    }
-
-    private Path metaPath(String chunkId) {
-        return chunksDir.resolve(chunkId + ".meta");
     }
 
     private void loadIdentities() throws IOException {
@@ -374,6 +553,8 @@ public class ChunkStore {
         } catch (IOException ignored) {
         }
     }
+
+    public record StoredChunk(ChunkFileName.Parsed parsed, Path payload, Path meta) {}
 
     public final class IncomingWrite {
         private final String chunkId;
