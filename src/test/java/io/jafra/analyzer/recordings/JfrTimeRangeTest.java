@@ -29,6 +29,8 @@ class JfrTimeRangeTest {
         assertEquals(start.plusSeconds(12), span.stop());
         assertTrue(span.overlaps(start.plusSeconds(10), start.plusSeconds(13)));
         assertTrue(!span.overlaps(start.plusSeconds(12), start.plusSeconds(20)));
+        assertTrue(span.overlapsChunkWindow(start.plusSeconds(10), start.plusSeconds(12)));
+        assertTrue(span.overlapsChunkWindow(start.plusSeconds(2), start.plusSeconds(2)));
     }
 
     @Test

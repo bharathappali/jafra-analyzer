@@ -21,15 +21,16 @@ public record AnalysisEnvelope(
         String generatedAt) {
 
     static AnalysisEnvelope from(RecordingCatalog.WindowSelection selection) {
-        List<String> files = selection.recordings().stream()
-                .map(item -> item.summary().filename())
-                .toList();
+        List<String> files = selection.recordings().isEmpty()
+                ? List.of()
+                : selection.recordings().stream().map(item -> item.summary().filename()).toList();
+        String recording = files.isEmpty() ? null : String.join(",", files);
         return new AnalysisEnvelope(
                 selection.key().namespace(),
                 selection.key().pod(),
                 selection.key().container(),
-                String.join(",", files),
-                files,
+                recording,
+                files.isEmpty() ? null : files,
                 iso(selection.start()),
                 iso(selection.stop()),
                 iso(selection.from()),

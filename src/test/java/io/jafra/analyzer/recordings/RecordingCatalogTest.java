@@ -136,6 +136,88 @@ class RecordingCatalogTest {
     }
 
     @Test
+    void chunkWindowIncludesEveryChunkThatTouchesFromTo(@TempDir Path root) throws Exception {
+        CatalogFixture fixture = CatalogFixture.create(root);
+        Instant t0 = Instant.parse("2026-08-17T09:00:00Z");
+        Instant t2 = t0.plusSeconds(120);
+        Instant t4 = t0.plusSeconds(240);
+        String recordingId = "local-demo/uid/app/profile-0.jfr";
+        persistTimed(fixture.store, "c1", recordingId, "ns-a", "pod-a", "app", "profile-0.jfr", t0, Duration.ofSeconds(180));
+        persistTimed(
+                fixture.store,
+                "c2",
+                recordingId,
+                "ns-a",
+                "pod-a",
+                "app",
+                "profile-0.jfr",
+                t4,
+                Duration.ofSeconds(120),
+                1_000L);
+        persistTimed(
+                fixture.store,
+                "c3",
+                recordingId,
+                "ns-a",
+                "pod-a",
+                "app",
+                "profile-0.jfr",
+                t0.plusSeconds(600),
+                Duration.ofSeconds(300),
+                2_000_000L);
+
+        RecordingCatalog.WindowSelection selected = fixture.catalog.openChunkWindow(
+                        "ns-a",
+                        "pod-a",
+                        "app",
+                        ReportWindow.parse(t4, null, t2.toString(), t4.toString(), null, null))
+                .orElseThrow();
+        assertEquals(2, selected.chunks());
+        assertEquals(
+                List.of(fixture.store.payloadPath("c1"), fixture.store.payloadPath("c2")),
+                selected.chunkFiles());
+        assertEquals(t2, selected.from());
+        assertEquals(t4, selected.to());
+    }
+
+    @Test
+    void chunkWindowSelectsOnlyChunksOverlappingTime(@TempDir Path root) throws Exception {
+        CatalogFixture fixture = CatalogFixture.create(root);
+        Instant early = Instant.parse("2026-08-17T09:00:00Z");
+        Instant late = Instant.parse("2026-08-17T10:00:00Z");
+        Instant now = Instant.parse("2026-08-17T10:05:00Z");
+        String recordingId = "local-demo/uid/app/profile-0.jfr";
+        persistTimed(fixture.store, "early", recordingId, "ns-a", "pod-a", "app", "profile-0.jfr", early, Duration.ofMinutes(1));
+        persistTimed(
+                fixture.store,
+                "late",
+                recordingId,
+                "ns-a",
+                "pod-a",
+                "app",
+                "profile-0.jfr",
+                late,
+                Duration.ofMinutes(1),
+                512_000L);
+
+        RecordingCatalog.WindowSelection onlyLate = fixture.catalog.openChunkWindow(
+                        "ns-a", "pod-a", "app", ReportWindow.parse(now, "10m", null, null, null, null))
+                .orElseThrow();
+        assertEquals(1, onlyLate.chunks());
+        assertEquals(fixture.store.payloadPath("late"), onlyLate.chunkFiles().getFirst());
+
+        RecordingCatalog.WindowSelection rotationWindow = fixture.catalog.openWindow(
+                        "ns-a",
+                        "pod-a",
+                        "app",
+                        ReportWindow.parse(now, null, "2026-08-17T09:00:00Z", "2026-08-17T09:02:00Z", null, null))
+                .orElseThrow();
+        assertEquals(1, rotationWindow.chunks());
+        assertEquals(fixture.store.payloadPath("early"), rotationWindow.chunkFiles().getFirst());
+        assertNotEquals(onlyLate.chunkFiles(), rotationWindow.chunkFiles());
+    }
+
+    @Test
     void unnamedRecordingsAreOmittedUntilPodNameIsKnown(@TempDir Path root) throws Exception {
         CatalogFixture fixture = CatalogFixture.create(root);
         persist(fixture.store, "anon", "default", "", "app", "profile-0.jfr", new byte[] {1, 2});
@@ -173,6 +255,53 @@ class RecordingCatalogTest {
         ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
         write.write(payload);
         store.commit(write, metadata);
+    }
+
+    private static void persistTimed(
+            ChunkStore store,
+            String chunkId,
+            String recordingId,
+            String namespace,
+            String podName,
+            String container,
+            String filename,
+            Instant start,
+            Duration duration,
+            long offset)
+            throws Exception {
+        byte[] payload = timedJfr(start, duration);
+        long startNs = start.getEpochSecond() * 1_000_000_000L + start.getNano();
+        ChunkMetadata metadata = new ChunkMetadata(
+                chunkId,
+                recordingId,
+                "local-demo",
+                namespace,
+                "uid",
+                podName,
+                container,
+                filename,
+                offset,
+                payload.length,
+                "checksum",
+                startNs,
+                duration.toNanos());
+        ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
+        write.write(payload);
+        store.commit(write, metadata);
+    }
+
+    private static void persistTimed(
+            ChunkStore store,
+            String chunkId,
+            String recordingId,
+            String namespace,
+            String podName,
+            String container,
+            String filename,
+            Instant start,
+            Duration duration)
+            throws Exception {
+        persistTimed(store, chunkId, recordingId, namespace, podName, container, filename, start, duration, 0);
     }
 
     private static byte[] timedJfr(Instant start, Duration duration) {

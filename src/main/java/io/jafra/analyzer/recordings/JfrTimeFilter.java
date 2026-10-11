@@ -9,7 +9,7 @@ import org.openjdk.jmc.common.unit.IQuantity;
 import org.openjdk.jmc.common.unit.UnitLookup;
 import org.openjdk.jmc.flightrecorder.JfrAttributes;
 
-/** Restrict JMC event collections to a wall-clock analysis window. */
+/** Restrict JMC event collections to a wall-clock window; both bounds are inclusive on event start time. */
 final class JfrTimeFilter {
     private JfrTimeFilter() {}
 
@@ -20,11 +20,11 @@ final class JfrTimeFilter {
         IItemFilter filter;
         if (from != null && to != null) {
             filter = ItemFilters.interval(
-                    JfrAttributes.START_TIME, quantity(from), true, quantity(to), false);
+                    JfrAttributes.START_TIME, quantity(from), true, quantity(to), true);
         } else if (from != null) {
             filter = ItemFilters.moreOrEqual(JfrAttributes.START_TIME, quantity(from));
         } else {
-            filter = ItemFilters.less(JfrAttributes.START_TIME, quantity(to));
+            filter = ItemFilters.lessOrEqual(JfrAttributes.START_TIME, quantity(to));
         }
         return events.apply(filter);
     }

@@ -144,6 +144,7 @@ final class JfrTimeRange {
             return new TimeSpan(start, stop);
         }
 
+        /** Rotation overlap (half-open window end). */
         boolean overlaps(Instant from, Instant to) {
             if (from == null || to == null) {
                 return false;
@@ -152,6 +153,18 @@ final class JfrTimeRange {
                 return !start.isBefore(from) && start.isBefore(to);
             }
             return start.isBefore(to) && stop.isAfter(from);
+        }
+
+        /**
+         * Chunk inclusion for timeseries APIs: chunk span {@code [start, stop]} intersects
+         * window {@code [from, to]} with an inclusive upper bound on {@code to}, so a chunk
+         * that begins exactly when the window ends is still loaded (events are clipped later).
+         */
+        boolean overlapsChunkWindow(Instant from, Instant to) {
+            if (from == null || to == null) {
+                return false;
+            }
+            return stop.isAfter(from) && !start.isAfter(to);
         }
 
         String startIso() {

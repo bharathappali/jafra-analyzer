@@ -135,6 +135,80 @@ public class RecordingCatalog {
         return Optional.of(openSelection(selected, start, stop, from, to, bytes, chunks));
     }
 
+    /**
+     * Timeseries analysis: include only chunk payloads whose own time span overlaps the window.
+     * Does not select whole rotations or require contiguous recording prefixes.
+     */
+    public Optional<WindowSelection> openChunkWindow(
+            String namespace,
+            String pod,
+            String container,
+            ReportWindow window)
+            throws IOException {
+        List<ChunkMetadata> workload = listWorkloadChunks(namespace, pod, container);
+        if (workload.isEmpty()) {
+            throw new NotFoundException("no chunks for namespace/%s/pod/%s/container/%s"
+                    .formatted(namespace, pod, container));
+        }
+        Instant coverageStart = null;
+        Instant coverageStop = null;
+        for (ChunkMetadata chunk : workload) {
+            JfrTimeRange.TimeSpan span = chunkSpan(chunk);
+            if (span == null) {
+                continue;
+            }
+            coverageStart = coverageStart == null || span.start().isBefore(coverageStart) ? span.start() : coverageStart;
+            coverageStop = coverageStop == null || span.stop().isAfter(coverageStop) ? span.stop() : coverageStop;
+        }
+        if (coverageStart == null || coverageStop == null) {
+            throw new NotFoundException("chunks have no usable timestamps for namespace/%s/pod/%s/container/%s"
+                    .formatted(namespace, pod, container));
+        }
+        Instant from = window.resolvedFrom(coverageStart);
+        Instant to = window.resolvedTo(coverageStop);
+        if (from == null || to == null || !from.isBefore(to)) {
+            throw new IllegalArgumentException("from must be earlier than to");
+        }
+        List<ChunkMetadata> selected = new ArrayList<>();
+        Instant dataStart = null;
+        Instant dataStop = null;
+        long bytes = 0;
+        for (ChunkMetadata chunk : workload) {
+            JfrTimeRange.TimeSpan span = chunkSpan(chunk);
+            if (span == null || !span.overlapsChunkWindow(from, to)) {
+                continue;
+            }
+            selected.add(chunk);
+            dataStart = dataStart == null || span.start().isBefore(dataStart) ? span.start() : dataStart;
+            dataStop = dataStop == null || span.stop().isAfter(dataStop) ? span.stop() : dataStop;
+            bytes += chunk.chunkLength();
+        }
+        if (selected.isEmpty()) {
+            return Optional.empty();
+        }
+        selected.sort(Comparator
+                .comparing((ChunkMetadata chunk) -> chunkSpan(chunk).start())
+                .thenComparing(ChunkMetadata::recordingId)
+                .thenComparingLong(ChunkMetadata::chunkOffset));
+        List<Path> chunkFiles = new ArrayList<>(selected.size());
+        for (ChunkMetadata chunk : selected) {
+            chunkFiles.add(store.payloadPath(chunk.chunkId()));
+        }
+        ChunkMetadata anchor = selected.getFirst();
+        String podName = store.podName(anchor.podUid(), anchor.podName());
+        WorkloadKey key = new WorkloadKey(anchor.namespace(), podName, anchor.containerName());
+        return Optional.of(new WindowSelection(
+                key,
+                List.of(),
+                List.copyOf(chunkFiles),
+                dataStart,
+                dataStop,
+                from,
+                to,
+                bytes,
+                selected.size()));
+    }
+
     public WindowSelection singleFile(IndexedRecording recording) throws IOException {
         JfrTimeRange.TimeSpan span = recording.span();
         return openSelection(
@@ -232,6 +306,45 @@ public class RecordingCatalog {
                 .thenComparingInt(recording -> recording.summary().sequence())
                 .thenComparing(recording -> recording.summary().filename()));
         return recordings;
+    }
+
+    private List<ChunkMetadata> listWorkloadChunks(String namespace, String pod, String container) {
+        List<ChunkMetadata> chunks = new ArrayList<>();
+        for (ChunkStore.StoredChunk stored : store.storedChunks()) {
+            if (!ChunkFileName.allows(stored.parsed(), namespace, pod, container)) {
+                continue;
+            }
+            ChunkMetadata metadata = store.readMeta(stored);
+            if (metadata == null) {
+                continue;
+            }
+            String podName = store.podName(metadata.podUid(), metadata.podName());
+            if (podName == null || podName.isBlank()) {
+                continue;
+            }
+            if (!blankOrEqual(namespace, metadata.namespace())
+                    || !blankOrEqual(pod, podName)
+                    || !blankOrEqual(container, metadata.containerName())) {
+                continue;
+            }
+            store.absorb(metadata);
+            chunks.add(metadata);
+        }
+        return chunks;
+    }
+
+    private JfrTimeRange.TimeSpan chunkSpan(ChunkMetadata chunk) {
+        if (chunk == null) {
+            return null;
+        }
+        if (chunk.chunkStartTimeNs() > 0) {
+            Instant start = JfrTimeRange.fromEpochNanos(chunk.chunkStartTimeNs());
+            Instant stop = chunk.chunkDurationNs() > 0
+                    ? JfrTimeRange.fromEpochNanos(chunk.chunkStartTimeNs() + chunk.chunkDurationNs())
+                    : start;
+            return JfrTimeRange.TimeSpan.of(start, stop);
+        }
+        return JfrTimeRange.ofFile(store.payloadPath(chunk.chunkId()));
     }
 
     private JfrTimeRange.TimeSpan resolveTimes(String recordingId) {

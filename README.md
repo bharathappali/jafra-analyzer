@@ -132,7 +132,9 @@ curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/contai
 (up to 7 days) and is a wall-clock window ending at request time. Analysis
 reads the overlapping recordings' chunk files in the order they used to be
 stitched: recording order, then offset order inside each recording. `/report`
-and `/summary` then filter events to the requested `from`/`to`. Absolute
+and `/summary` then filter events to the requested `from`/`to` (both bounds
+inclusive on event start time). Timeseries APIs use the same rule after chunk
+selection. Absolute
 `from` / `to` / `before` / `after` are ISO-8601 timestamps. `from` alone reads
 through now; `to` alone reads from the earliest stored file. Do not combine
 `last`, `from`/`to`, `before`, and `after`. A valid window with no overlapping
@@ -159,10 +161,11 @@ curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/contai
 ### Collect APIs (timeseries JFR reads)
 
 These endpoints require `namespace`, `pod`, and `container`. They do **not**
-accept `recording`; analysis is always over a **time window** that may span
-multiple rotations. Use `last`, `from`/`to`, `before`, or `after` (same rules
-as `/report`). If none are set, the window defaults to **`last=15m`** ending at
-request time. Passing `recording` returns **400**.
+accept `recording` or whole rotation files. Analysis is **chunk- and time-based**:
+only chunk payloads whose timestamps overlap the window are loaded, then events
+are clipped to the same window. Use `last`, `from`/`to`, `before`, or `after`
+(same parameter rules as `/report`). Default **`last=15m`** when omitted.
+Passing `recording` returns **400**.
 
 ```bash
 curl 'http://127.0.0.1:8080/api/v1/event-types?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'

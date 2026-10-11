@@ -9,6 +9,7 @@ import java.util.function.Function;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -91,11 +92,17 @@ public class RecordingWindowSelection {
         }
         RecordingCatalog.WindowSelection selected;
         try {
-            Optional<RecordingCatalog.WindowSelection> opened = catalog.openWindow(namespace, pod, container, window);
+            Optional<RecordingCatalog.WindowSelection> opened = catalog.openChunkWindow(namespace, pod, container, window);
             if (opened.isEmpty()) {
                 throw missingWindow(namespace, pod, container, window);
             }
             selected = opened.get();
+        } catch (NotFoundException error) {
+            throw new WebApplicationException(
+                    Response.status(404)
+                            .type(MediaType.APPLICATION_JSON)
+                            .entity(Map.of("status", "not_found", "error", error.getMessage()))
+                            .build());
         } catch (IllegalArgumentException error) {
             throw badRequest(error.getMessage());
         } catch (IOException error) {
