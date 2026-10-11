@@ -144,6 +144,25 @@ curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/contai
 curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/containers/auth-cache/recordings/profile-3.jfr/summary'
 ```
 
+### Collect APIs (targeted JFR reads)
+
+These endpoints share the same workload query parameters and time-window rules
+as `/summary` and `/report`:
+
+```bash
+curl 'http://127.0.0.1:8080/api/v1/event-types?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+curl 'http://127.0.0.1:8080/api/v1/events?namespace=default&pod=auth-cache-abc&container=auth-cache&types=JVMInformation&view=summary'
+curl 'http://127.0.0.1:8080/api/v1/events?namespace=default&pod=auth-cache-abc&container=auth-cache&types=ExecutionSample&view=records&limit=20'
+curl 'http://127.0.0.1:8080/api/v1/jvm?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+curl 'http://127.0.0.1:8080/api/v1/jvm/flags?namespace=default&pod=auth-cache-abc&container=auth-cache&names=MaxHeapSize,UseG1GC'
+```
+
+`GET /api/v1/events` requires `types=` (comma-separated JFR type ids or
+suffixes such as `JVMInformation`). `view` is `summary` (default), `records`,
+or `series` (one type plus `field=`). Optional `minDuration` filters duration
+fields on records; `limit` caps rows (records default 50, max 500; series
+default 500, max 5000).
+
 Many JDK Mission Control rules expect event types that async-profiler does
 not emit by itself (GC pauses, compilation, socket IO, code cache). Those
 findings come back as not applicable (`score: -1`) unless the recording was

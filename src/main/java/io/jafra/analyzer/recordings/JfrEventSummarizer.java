@@ -40,10 +40,30 @@ public class JfrEventSummarizer {
             "stackTrace",
             "sampledThread");
 
+    public List<EventTypeRow> listEventTypes(RecordingCatalog.WindowSelection selection) throws IOException {
+        IItemCollection events = loadEvents(selection);
+        Map<String, IType<?>> types = discoverTypes(events);
+        List<EventTypeRow> rows = new ArrayList<>();
+        for (IType<?> type : types.values()) {
+            long count = quantityLong(events.apply(ItemFilters.type(type.getIdentifier()))
+                    .getAggregate(Aggregators.count()));
+            if (count > 0) {
+                rows.add(new EventTypeRow(
+                        type.getIdentifier(), type.getName(), topicOf(type.getIdentifier()), count));
+            }
+        }
+        return rows;
+    }
+
+    public Map<String, EventSummary> summarizeTypes(
+            RecordingCatalog.WindowSelection selection, Set<String> typeIds) throws IOException {
+        IItemCollection events = loadEvents(selection);
+        return summarizeEvents(events, "", typeIds);
+    }
+
     public EventSummaryDocument summarize(RecordingCatalog.WindowSelection selection, String filter)
             throws IOException {
-        IItemCollection events = JfrChunkFiles.load(selection.chunkFiles());
-        events = JfrTimeFilter.apply(events, selection.from(), selection.to());
+        IItemCollection events = loadEvents(selection);
         String needle = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
         Map<String, EventSummary> byType = summarizeEvents(events, needle);
         Map<String, TopicSummary> topics = summarizeTopics(byType);
@@ -67,7 +87,12 @@ public class JfrEventSummarizer {
                 topics);
     }
 
-    private static Map<String, EventSummary> summarizeEvents(IItemCollection events, String needle) {
+    static IItemCollection loadEvents(RecordingCatalog.WindowSelection selection) throws IOException {
+        IItemCollection events = JfrChunkFiles.load(selection.chunkFiles());
+        return JfrTimeFilter.apply(events, selection.from(), selection.to());
+    }
+
+    static Map<String, IType<?>> discoverTypes(IItemCollection events) {
         Map<String, IType<?>> types = new LinkedHashMap<>();
         for (IItemIterable iterable : events) {
             IType<?> type = iterable.getType();
@@ -75,9 +100,22 @@ public class JfrEventSummarizer {
                 types.putIfAbsent(type.getIdentifier(), type);
             }
         }
+        return types;
+    }
+
+    private static Map<String, EventSummary> summarizeEvents(IItemCollection events, String needle) {
+        return summarizeEvents(events, needle, null);
+    }
+
+    private static Map<String, EventSummary> summarizeEvents(
+            IItemCollection events, String needle, Set<String> onlyTypeIds) {
+        Map<String, IType<?>> types = discoverTypes(events);
         Map<String, EventSummary> summaries = new LinkedHashMap<>();
         for (Map.Entry<String, IType<?>> entry : types.entrySet()) {
             IType<?> type = entry.getValue();
+            if (onlyTypeIds != null && !onlyTypeIds.contains(type.getIdentifier())) {
+                continue;
+            }
             String topic = topicOf(type.getIdentifier());
             if (!matches(needle, type.getIdentifier(), type.getName(), topic)) {
                 continue;
@@ -504,6 +542,9 @@ public class JfrEventSummarizer {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ValueStats(String name, String unit, Number value, String display, String text) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record EventTypeRow(String id, String name, String topic, long count) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record EventSummary(String name, String topic, long count, Map<String, FieldStats> fields) {}

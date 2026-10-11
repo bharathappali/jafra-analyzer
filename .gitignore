@@ -1,3 +1,4 @@
 target/
 src/main/proto/jafra.proto
 .idea
+test-data/
