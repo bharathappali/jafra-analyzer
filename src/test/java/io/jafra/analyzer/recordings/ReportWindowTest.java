@@ -85,4 +85,12 @@ class ReportWindowTest {
         assertNull(ReportWindow.parse(NOW, null, null, null, null, null));
         assertNull(ReportWindow.parse(NOW, "  ", "", null, null, null));
     }
+
+    @Test
+    void timeseriesDefaultsToFifteenMinutes() {
+        ReportWindow window = ReportWindow.parseTimeseries(NOW, null, null, null, null, null);
+        assertEquals(NOW.minus(ReportWindow.DEFAULT_TIMESERIES), window.from());
+        assertEquals(NOW, window.to());
+        assertEquals(ReportWindow.DEFAULT_TIMESERIES_LAST, window.last());
+    }
 }

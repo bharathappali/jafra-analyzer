@@ -64,6 +64,46 @@ public class RecordingWindowSelection {
         return action.apply(selected);
     }
 
+    /**
+     * Timeseries APIs: only {@code last} / {@code from} / {@code to} / {@code before} / {@code after}.
+     * Defaults to {@link ReportWindow#DEFAULT_TIMESERIES_LAST} when none are set. {@code recording} is rejected.
+     */
+    public <T> T withTimeSeries(
+            String namespace,
+            String pod,
+            String container,
+            String recording,
+            String last,
+            String from,
+            String to,
+            String before,
+            String after,
+            Function<RecordingCatalog.WindowSelection, T> action) {
+        validateWorkloadParams(namespace, pod, container);
+        if (recording != null && !recording.isBlank()) {
+            throw badRequest("recording is not supported; use last, from/to, before, or after");
+        }
+        ReportWindow window;
+        try {
+            window = ReportWindow.parseTimeseries(Instant.now(), last, from, to, before, after);
+        } catch (IllegalArgumentException error) {
+            throw badRequest(error.getMessage());
+        }
+        RecordingCatalog.WindowSelection selected;
+        try {
+            Optional<RecordingCatalog.WindowSelection> opened = catalog.openWindow(namespace, pod, container, window);
+            if (opened.isEmpty()) {
+                throw missingWindow(namespace, pod, container, window);
+            }
+            selected = opened.get();
+        } catch (IllegalArgumentException error) {
+            throw badRequest(error.getMessage());
+        } catch (IOException error) {
+            throw unavailable(namespace, pod, container, "window", error.getMessage());
+        }
+        return action.apply(selected);
+    }
+
     public RecordingCatalog.WorkloadRecordings requireWorkload(String namespace, String pod, String container) {
         return catalog.requireWorkload(namespace, pod, container);
     }

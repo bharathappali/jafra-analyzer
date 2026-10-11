@@ -8,6 +8,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class ReportWindow {
+    public static final Duration DEFAULT_TIMESERIES = Duration.ofMinutes(15);
+    public static final String DEFAULT_TIMESERIES_LAST = "15m";
+
     private static final Duration MAX_LAST = Duration.ofDays(7);
     private static final Pattern LAST = Pattern.compile(
             "^\\s*(\\d+)\\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\\s*$",
@@ -72,6 +75,25 @@ public final class ReportWindow {
             throw new IllegalArgumentException("from must be earlier than to");
         }
         return new ReportWindow(start, end, null);
+    }
+
+    /**
+     * Like {@link #parse}, but when no time selector is present uses a {@value #DEFAULT_TIMESERIES_LAST}
+     * wall-clock window ending at {@code now}. Used by collect/aggregation APIs (timeseries analysis).
+     */
+    public static ReportWindow parseTimeseries(
+            Instant now,
+            String last,
+            String from,
+            String to,
+            String before,
+            String after) {
+        ReportWindow window = parse(now, last, from, to, before, after);
+        if (window != null) {
+            return window;
+        }
+        Instant clock = now == null ? Instant.now() : now;
+        return new ReportWindow(clock.minus(DEFAULT_TIMESERIES), clock, DEFAULT_TIMESERIES_LAST);
     }
 
     public Instant from() {

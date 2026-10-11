@@ -156,16 +156,19 @@ curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/contai
 curl 'http://127.0.0.1:8080/api/v1/namespaces/default/pods/auth-cache-abc/containers/auth-cache/recordings/profile-3.jfr/summary'
 ```
 
-### Collect APIs (targeted JFR reads)
+### Collect APIs (timeseries JFR reads)
 
-These endpoints share the same workload query parameters and time-window rules
-as `/summary` and `/report`:
+These endpoints require `namespace`, `pod`, and `container`. They do **not**
+accept `recording`; analysis is always over a **time window** that may span
+multiple rotations. Use `last`, `from`/`to`, `before`, or `after` (same rules
+as `/report`). If none are set, the window defaults to **`last=15m`** ending at
+request time. Passing `recording` returns **400**.
 
 ```bash
-curl 'http://127.0.0.1:8080/api/v1/event-types?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
-curl 'http://127.0.0.1:8080/api/v1/events?namespace=default&pod=auth-cache-abc&container=auth-cache&types=JVMInformation&view=summary'
-curl 'http://127.0.0.1:8080/api/v1/events?namespace=default&pod=auth-cache-abc&container=auth-cache&types=ExecutionSample&view=records&limit=20'
-curl 'http://127.0.0.1:8080/api/v1/jvm?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+curl 'http://127.0.0.1:8080/api/v1/event-types?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
+curl 'http://127.0.0.1:8080/api/v1/events?namespace=default&pod=auth-cache-abc&container=auth-cache&types=JVMInformation&view=summary&last=15m'
+curl 'http://127.0.0.1:8080/api/v1/events?namespace=default&pod=auth-cache-abc&container=auth-cache&types=ExecutionSample&view=records&limit=20&from=2026-08-17T09:00:00Z&to=2026-08-17T09:10:00Z'
+curl 'http://127.0.0.1:8080/api/v1/jvm?namespace=default&pod=auth-cache-abc&container=auth-cache'
 curl 'http://127.0.0.1:8080/api/v1/jvm/flags?namespace=default&pod=auth-cache-abc&container=auth-cache&names=MaxHeapSize,UseG1GC'
 ```
 
@@ -175,12 +178,13 @@ or `series` (one type plus `field=`). Optional `minDuration` filters duration
 fields on records; `limit` caps rows (records default 50, max 500; series
 default 500, max 5000).
 
-### Aggregation APIs (algorithm helpers)
+### Aggregation APIs (timeseries algorithm helpers)
 
-Pre-computed views aligned with `analysis_algo.md` playbooks:
+Same workload identity and time-window rules as the collect APIs (`recording`
+is not supported; default **`last=15m`** when omitted):
 
 ```bash
-curl 'http://127.0.0.1:8080/api/v1/aggregations/gc-pauses?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+curl 'http://127.0.0.1:8080/api/v1/aggregations/gc-pauses?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
 curl 'http://127.0.0.1:8080/api/v1/aggregations/trends?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
 curl 'http://127.0.0.1:8080/api/v1/aggregations/allocations?namespace=default&pod=auth-cache-abc&container=auth-cache&limit=20'
 curl 'http://127.0.0.1:8080/api/v1/aggregations/samples?namespace=default&pod=auth-cache-abc&container=auth-cache&flavor=cpu'
@@ -201,7 +205,7 @@ compose collect and aggregation calls for an `analysis_algo.md` playbook:
 
 ```bash
 curl 'http://127.0.0.1:8080/api/v1/bundles'
-curl 'http://127.0.0.1:8080/api/v1/bundles/version-check?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+curl 'http://127.0.0.1:8080/api/v1/bundles/version-check?namespace=default&pod=auth-cache-abc&container=auth-cache&last=15m'
 curl 'http://127.0.0.1:8080/api/v1/bundles/gc?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
 curl 'http://127.0.0.1:8080/api/v1/bundles/memory?namespace=default&pod=auth-cache-abc&container=auth-cache&limit=20'
 curl 'http://127.0.0.1:8080/api/v1/bundles/performance?namespace=default&pod=auth-cache-abc&container=auth-cache&flavor=cpu'

@@ -39,7 +39,7 @@ public class AggregationsResource {
             @QueryParam("to") String to,
             @QueryParam("before") String before,
             @QueryParam("after") String after) {
-        return selection.withSelection(
+        return selection.withTimeSeries(
                 namespace,
                 pod,
                 container,

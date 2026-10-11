@@ -1,6 +1,6 @@
 package io.jafra.analyzer.api;
 
-import static io.restassured.RestAssured.given;
+import static io.jafra.analyzer.test.GoldenWorkloadQuery.workloadWindow;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.notNullValue;
@@ -25,11 +25,7 @@ class AggregationApiGoldenTest {
 
     @Test
     void gcPausesExposePauseStats() {
-        given().when()
-                .queryParam("namespace", "default")
-                .queryParam("pod", "auth-cache-84cd9fbc49-fttcq")
-                .queryParam("container", "auth-cache")
-                .queryParam("recording", "profile-223.jfr")
+        workloadWindow().when()
                 .get("/api/v1/aggregations/gc-pauses")
                 .then()
                 .statusCode(200)
@@ -40,11 +36,7 @@ class AggregationApiGoldenTest {
 
     @Test
     void trendsIncludeHeapSeries() {
-        given().when()
-                .queryParam("namespace", "default")
-                .queryParam("pod", "auth-cache-84cd9fbc49-fttcq")
-                .queryParam("container", "auth-cache")
-                .queryParam("recording", "profile-223.jfr")
+        workloadWindow().when()
                 .get("/api/v1/aggregations/trends")
                 .then()
                 .statusCode(200)
@@ -55,12 +47,9 @@ class AggregationApiGoldenTest {
 
     @Test
     void allocationsRankClassesAndStacks() {
-        given().when()
-                .queryParam("namespace", "default")
-                .queryParam("pod", "auth-cache-84cd9fbc49-fttcq")
-                .queryParam("container", "auth-cache")
-                .queryParam("recording", "profile-607.jfr")
+        workloadWindow()
                 .queryParam("limit", 5)
+                .when()
                 .get("/api/v1/aggregations/allocations")
                 .then()
                 .statusCode(200)
@@ -70,13 +59,10 @@ class AggregationApiGoldenTest {
 
     @Test
     void samplesRankExecutionStacks() {
-        given().when()
-                .queryParam("namespace", "default")
-                .queryParam("pod", "auth-cache-84cd9fbc49-fttcq")
-                .queryParam("container", "auth-cache")
-                .queryParam("recording", "profile-607.jfr")
+        workloadWindow()
                 .queryParam("flavor", "cpu")
                 .queryParam("limit", 5)
+                .when()
                 .get("/api/v1/aggregations/samples")
                 .then()
                 .statusCode(200)
@@ -87,11 +73,7 @@ class AggregationApiGoldenTest {
 
     @Test
     void invalidKindIsBadRequest() {
-        given().when()
-                .queryParam("namespace", "default")
-                .queryParam("pod", "auth-cache-84cd9fbc49-fttcq")
-                .queryParam("container", "auth-cache")
-                .queryParam("recording", "profile-223.jfr")
+        workloadWindow().when()
                 .get("/api/v1/aggregations/not-a-kind")
                 .then()
                 .statusCode(400);
