@@ -181,6 +181,26 @@ or `exceptions`. `limit` defaults to 20 (max 100) for ranked `top` entries.
 `flavor` on `samples` is `cpu`, `wall`, or `all` (default). `contention`
 defaults `minDuration` to `20ms` when omitted.
 
+### Bundle APIs (one-shot playbooks)
+
+`GET /api/v1/bundles` lists declarative bundle ids. Each `GET /api/v1/bundles/{id}`
+returns a single JSON document with shared `context` and named `sections` that
+compose collect and aggregation calls for an `analysis_algo.md` playbook:
+
+```bash
+curl 'http://127.0.0.1:8080/api/v1/bundles'
+curl 'http://127.0.0.1:8080/api/v1/bundles/version-check?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+curl 'http://127.0.0.1:8080/api/v1/bundles/gc?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
+curl 'http://127.0.0.1:8080/api/v1/bundles/memory?namespace=default&pod=auth-cache-abc&container=auth-cache&limit=20'
+curl 'http://127.0.0.1:8080/api/v1/bundles/performance?namespace=default&pod=auth-cache-abc&container=auth-cache&flavor=cpu'
+```
+
+Bundle ids: `version-check`, `memory`, `gc`, `threads`, `performance`,
+`jvm-config`, `exceptions`, `diagnostics`, and `proactive`. Optional query
+params: `limit`, `minDuration` (threads contention), `flavor` (performance
+samples), and `names` (jvm-config flag filter). Workload and time-window
+params match the collect and aggregation endpoints.
+
 Many JDK Mission Control rules expect event types that async-profiler does
 not emit by itself (GC pauses, compilation, socket IO, code cache). Those
 findings come back as not applicable (`score: -1`) unless the recording was
