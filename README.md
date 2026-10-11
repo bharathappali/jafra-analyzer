@@ -163,6 +163,24 @@ or `series` (one type plus `field=`). Optional `minDuration` filters duration
 fields on records; `limit` caps rows (records default 50, max 500; series
 default 500, max 5000).
 
+### Aggregation APIs (algorithm helpers)
+
+Pre-computed views aligned with `analysis_algo.md` playbooks:
+
+```bash
+curl 'http://127.0.0.1:8080/api/v1/aggregations/gc-pauses?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+curl 'http://127.0.0.1:8080/api/v1/aggregations/trends?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
+curl 'http://127.0.0.1:8080/api/v1/aggregations/allocations?namespace=default&pod=auth-cache-abc&container=auth-cache&limit=20'
+curl 'http://127.0.0.1:8080/api/v1/aggregations/samples?namespace=default&pod=auth-cache-abc&container=auth-cache&flavor=cpu'
+curl 'http://127.0.0.1:8080/api/v1/aggregations/contention?namespace=default&pod=auth-cache-abc&container=auth-cache&minDuration=20ms'
+curl 'http://127.0.0.1:8080/api/v1/aggregations/exceptions?namespace=default&pod=auth-cache-abc&container=auth-cache'
+```
+
+`kind` is one of `gc-pauses`, `trends`, `allocations`, `samples`, `contention`,
+or `exceptions`. `limit` defaults to 20 (max 100) for ranked `top` entries.
+`flavor` on `samples` is `cpu`, `wall`, or `all` (default). `contention`
+defaults `minDuration` to `20ms` when omitted.
+
 Many JDK Mission Control rules expect event types that async-profiler does
 not emit by itself (GC pauses, compilation, socket IO, code cache). Those
 findings come back as not applicable (`score: -1`) unless the recording was
