@@ -68,6 +68,9 @@ kubectl -n jafra-system port-forward svc/jafra-analyzer 8080:8080
 curl 'http://127.0.0.1:8080/api/v1/recordings'
 curl 'http://127.0.0.1:8080/api/v1/recordings?namespace=default&pod=auth-cache-abc&container=auth-cache'
 curl 'http://127.0.0.1:8080/api/v1/workload?namespace=default&pod=auth-cache-abc&container=auth-cache'
+curl 'http://127.0.0.1:8080/api/v1/workload'
+curl 'http://127.0.0.1:8080/api/v1/workload?namespace=default'
+curl 'http://127.0.0.1:8080/api/v1/workload?pod=auth-cache-abc'
 curl 'http://127.0.0.1:8080/api/v1/report?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
 curl 'http://127.0.0.1:8080/api/v1/summary?namespace=default&pod=auth-cache-abc&container=auth-cache&filter=heap'
 curl 'http://127.0.0.1:8080/api/v1/summary?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
@@ -77,6 +80,15 @@ Nested paths under `/api/v1/namespaces/...` remain for older clients. They
 respond with **HTTP 399** and a `Location` header pointing at the matching
 flat URL (same query string). Treat that as a permanent redirect to the flat
 API.
+
+`GET /api/v1/workload` doubles as a **workload index** (updated in memory on
+each durable chunk commit). Omit query parameters for
+`namespaces → pods → containers` with per-container `recordingCount`,
+`chunkCount`, optional `start`/`end` (from chunk meta), and `jvmVersion` when
+probed from an offset-0 chunk. Pass only `namespace`, or `namespace`+`pod`, to
+narrow the tree; pass only `pod` or `container` to search across namespaces.
+When all three parameters are set, the response is workload **detail**: the
+same stats plus the `recordings` rotation list (as before).
 
 Query any combination of filters on `/api/v1/recordings`:
 

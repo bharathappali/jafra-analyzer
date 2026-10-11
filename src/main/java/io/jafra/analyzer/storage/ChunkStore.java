@@ -17,6 +17,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import org.jboss.logging.Logger;
@@ -42,6 +44,7 @@ public class ChunkStore {
     private final Map<String, Path> payloadPaths = new ConcurrentHashMap<>();
     private final Map<String, Path> metaPaths = new ConcurrentHashMap<>();
     private final Set<String> chunkIds = ConcurrentHashMap.newKeySet();
+    private final CopyOnWriteArrayList<Consumer<ChunkMetadata>> commitListeners = new CopyOnWriteArrayList<>();
 
     public ChunkStore(Path root) {
         this.root = root;
@@ -148,6 +151,23 @@ public class ChunkStore {
         byRecording.computeIfAbsent(metadata.recordingId(), ignored -> new TreeMap<>())
                 .put(metadata.chunkOffset(), metadata);
         rememberPodName(metadata.namespace(), metadata.podUid(), metadata.podName());
+        notifyCommitted(metadata);
+    }
+
+    public void onCommit(Consumer<ChunkMetadata> listener) {
+        if (listener != null) {
+            commitListeners.add(listener);
+        }
+    }
+
+    private void notifyCommitted(ChunkMetadata metadata) {
+        for (Consumer<ChunkMetadata> listener : commitListeners) {
+            try {
+                listener.accept(metadata);
+            } catch (RuntimeException error) {
+                LOG.warnf(error, "chunk commit listener failed for %s", metadata.chunkId());
+            }
+        }
     }
 
     public void abort(IncomingWrite incoming) {
