@@ -59,13 +59,29 @@ Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 Recordings are indexed by **namespace**, **pod name**, and **container**.
 The HTTP API never uses JVM IDs. Pod UIDs stay on disk for uniqueness.
 
-Query any combination of filters:
+### Flat workload URLs (canonical)
+
+Use query parameters for workload identity on the flat resources:
 
 ```bash
 kubectl -n jafra-system port-forward svc/jafra-analyzer 8080:8080
 curl 'http://127.0.0.1:8080/api/v1/recordings'
-curl 'http://127.0.0.1:8080/api/v1/recordings?namespace=default'
 curl 'http://127.0.0.1:8080/api/v1/recordings?namespace=default&pod=auth-cache-abc&container=auth-cache'
+curl 'http://127.0.0.1:8080/api/v1/workload?namespace=default&pod=auth-cache-abc&container=auth-cache'
+curl 'http://127.0.0.1:8080/api/v1/report?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
+curl 'http://127.0.0.1:8080/api/v1/summary?namespace=default&pod=auth-cache-abc&container=auth-cache&filter=heap'
+curl 'http://127.0.0.1:8080/api/v1/summary?namespace=default&pod=auth-cache-abc&container=auth-cache&recording=profile-3.jfr'
+```
+
+Nested paths under `/api/v1/namespaces/...` remain for older clients. They
+respond with **HTTP 399** and a `Location` header pointing at the matching
+flat URL (same query string). Treat that as a permanent redirect to the flat
+API.
+
+Query any combination of filters on `/api/v1/recordings`:
+
+```bash
+curl 'http://127.0.0.1:8080/api/v1/recordings?namespace=default'
 ```
 
 Each file in those listings includes ISO-8601 `start` and `end` from the

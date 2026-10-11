@@ -46,13 +46,19 @@ class RecordingResourceTest {
                 .body("workloads[0].recordings[0].end", notNullValue());
 
         given().when()
-                .get("/api/v1/namespaces/api-test/pods/api-pod/containers/api-container")
+                .queryParam("namespace", "api-test")
+                .queryParam("pod", "api-pod")
+                .queryParam("container", "api-container")
+                .get("/api/v1/workload")
                 .then()
                 .statusCode(200)
                 .body("recordings", hasSize(1));
 
         Map<String, Object> report = given().when()
-                .get("/api/v1/namespaces/api-test/pods/api-pod/containers/api-container/report")
+                .queryParam("namespace", "api-test")
+                .queryParam("pod", "api-pod")
+                .queryParam("container", "api-container")
+                .get("/api/v1/report")
                 .then()
                 .statusCode(200)
                 .body("namespace", equalTo("api-test"))
@@ -65,8 +71,12 @@ class RecordingResourceTest {
         assertFalse(report.isEmpty());
 
         given().when()
+                .queryParam("namespace", "api-test")
+                .queryParam("pod", "api-pod")
+                .queryParam("container", "api-container")
+                .queryParam("recording", "profile-3.jfr")
                 .queryParam("filter", "heap")
-                .get("/api/v1/namespaces/api-test/pods/api-pod/containers/api-container/recordings/profile-3.jfr/report")
+                .get("/api/v1/report")
                 .then()
                 .statusCode(200)
                 .body("findings.size()", greaterThan(0));
@@ -78,7 +88,10 @@ class RecordingResourceTest {
         persist("sum-2", "sum-test", "sum-pod", "sum-container", "profile-2.jfr", dumpBusyRecording());
 
         given().when()
-                .get("/api/v1/namespaces/sum-test/pods/sum-pod/containers/sum-container/summary")
+                .queryParam("namespace", "sum-test")
+                .queryParam("pod", "sum-pod")
+                .queryParam("container", "sum-container")
+                .get("/api/v1/summary")
                 .then()
                 .statusCode(200)
                 .body("namespace", equalTo("sum-test"))
@@ -90,8 +103,11 @@ class RecordingResourceTest {
                 .body("end", notNullValue());
 
         given().when()
+                .queryParam("namespace", "sum-test")
+                .queryParam("pod", "sum-pod")
+                .queryParam("container", "sum-container")
                 .queryParam("last", "1h")
-                .get("/api/v1/namespaces/sum-test/pods/sum-pod/containers/sum-container/summary")
+                .get("/api/v1/summary")
                 .then()
                 .statusCode(200)
                 .body("recordings", contains("profile-1.jfr", "profile-2.jfr"))
@@ -100,14 +116,21 @@ class RecordingResourceTest {
                 .body("to", notNullValue());
 
         given().when()
+                .queryParam("namespace", "sum-test")
+                .queryParam("pod", "sum-pod")
+                .queryParam("container", "sum-container")
+                .queryParam("recording", "profile-1.jfr")
                 .queryParam("filter", "heap")
-                .get("/api/v1/namespaces/sum-test/pods/sum-pod/containers/sum-container/recordings/profile-1.jfr/summary")
+                .get("/api/v1/summary")
                 .then()
                 .statusCode(200);
 
         given().when()
+                .queryParam("namespace", "sum-test")
+                .queryParam("pod", "sum-pod")
+                .queryParam("container", "sum-container")
                 .queryParam("last", "nope")
-                .get("/api/v1/namespaces/sum-test/pods/sum-pod/containers/sum-container/summary")
+                .get("/api/v1/summary")
                 .then()
                 .statusCode(400);
     }
@@ -118,8 +141,11 @@ class RecordingResourceTest {
         persist("win-2", "win-test", "win-pod", "win-container", "profile-2.jfr", dumpRecording());
 
         given().when()
+                .queryParam("namespace", "win-test")
+                .queryParam("pod", "win-pod")
+                .queryParam("container", "win-container")
                 .queryParam("last", "1h")
-                .get("/api/v1/namespaces/win-test/pods/win-pod/containers/win-container/report")
+                .get("/api/v1/report")
                 .then()
                 .statusCode(200)
                 .body("recordings", contains("profile-1.jfr", "profile-2.jfr"))
@@ -130,24 +156,33 @@ class RecordingResourceTest {
                 .body("findings.size()", greaterThan(0));
 
         given().when()
+                .queryParam("namespace", "win-test")
+                .queryParam("pod", "win-pod")
+                .queryParam("container", "win-container")
                 .queryParam("from", "1990-01-01T00:00:00Z")
                 .queryParam("to", "1990-01-02T00:00:00Z")
-                .get("/api/v1/namespaces/win-test/pods/win-pod/containers/win-container/report")
+                .get("/api/v1/report")
                 .then()
                 .statusCode(404)
                 .body("status", equalTo("not_found"));
 
         given().when()
+                .queryParam("namespace", "win-test")
+                .queryParam("pod", "win-pod")
+                .queryParam("container", "win-container")
                 .queryParam("last", "nope")
-                .get("/api/v1/namespaces/win-test/pods/win-pod/containers/win-container/report")
+                .get("/api/v1/report")
                 .then()
                 .statusCode(400)
                 .body("status", equalTo("bad_request"));
 
         given().when()
+                .queryParam("namespace", "win-test")
+                .queryParam("pod", "win-pod")
+                .queryParam("container", "win-container")
                 .queryParam("last", "5m")
                 .queryParam("from", "2026-08-17T09:00:00Z")
-                .get("/api/v1/namespaces/win-test/pods/win-pod/containers/win-container/report")
+                .get("/api/v1/report")
                 .then()
                 .statusCode(400);
     }
@@ -155,7 +190,10 @@ class RecordingResourceTest {
     @Test
     void missingWorkloadIsNotFound() {
         given().when()
-                .get("/api/v1/namespaces/missing/pods/none/containers/none/report")
+                .queryParam("namespace", "missing")
+                .queryParam("pod", "none")
+                .queryParam("container", "none")
+                .get("/api/v1/report")
                 .then()
                 .statusCode(anyOf(equalTo(404)));
     }
