@@ -200,6 +200,30 @@ or `exceptions`. `limit` defaults to 20 (max 100) for ranked `top` entries.
 `flavor` on `samples` is `cpu`, `wall`, or `all` (default). `contention`
 defaults `minDuration` to `20ms` when omitted.
 
+### Analytics APIs (LLM-oriented multi-subsystem)
+
+Same workload identity and chunk time-window rules as collect/aggregation
+(`recording` is not supported). Returns `schemaVersion: 1` with fixed subsystem
+keys, pre-computed rollups, bucketed `series` (timeseries only), `evidence`
+top-N, `dataQuality`, and `correlations`.
+
+```bash
+curl 'http://127.0.0.1:8080/api/v1/analytics/timeseries?namespace=default&pod=auth-cache-abc&container=auth-cache&last=5m'
+curl 'http://127.0.0.1:8080/api/v1/analytics/timeseries?namespace=default&pod=auth-cache-abc&container=auth-cache&from=2026-08-17T09:00:00Z&to=2026-08-17T09:10:00Z&subsystem=cpu,gc,wall_time'
+curl 'http://127.0.0.1:8080/api/v1/analytics/daily_stats?namespace=default&pod=auth-cache-abc&container=auth-cache'
+```
+
+`GET /api/v1/analytics/timeseries` defaults to **`last=15m`** when no window is
+set. Optional `top` (default 15, max 30), `bucketSeconds`, and `subsystem`
+(comma filter). Subsystem ids: `context`, `cpu`, `wall_time`, `threads`,
+`heap`, `allocations`, `gc`, `locks`, `jit`, `io`, `container`,
+`native_memory`, `exceptions`, `vm_internal`.
+
+`GET /api/v1/analytics/daily_stats` returns rollups and correlations without
+per-bucket `series`. Default window is **`last=24h`** ending at request time.
+When both `from` and `to` are provided, that range is used instead (same
+semantics as other timeseries APIs).
+
 ### Bundle APIs (one-shot playbooks)
 
 `GET /api/v1/bundles` lists declarative bundle ids. Each `GET /api/v1/bundles/{id}`

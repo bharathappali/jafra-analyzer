@@ -16,15 +16,15 @@ import org.openjdk.jmc.flightrecorder.JfrAttributes;
 import org.openjdk.jmc.flightrecorder.stacktrace.FrameSeparator;
 import org.openjdk.jmc.flightrecorder.stacktrace.StacktraceFormatToolkit;
 
-/** Low-level JFR field reads shared by collect and aggregation services. */
-final class JfrItemAccess {
+/** Low-level JFR field reads shared by collect, aggregation, and analytics services. */
+public final class JfrItemAccess {
     private static final int MAX_STACK_CHARS = 12_000;
     private static final FrameSeparator FRAME_SEPARATOR =
             new FrameSeparator(FrameSeparator.FrameCategorization.METHOD, false);
 
     private JfrItemAccess() {}
 
-    static long startTimeNs(IItem item) {
+    public static long startTimeNs(IItem item) {
         IQuantity time = readQuantity(item, JfrAttributes.START_TIME);
         if (time == null) {
             return 0L;
@@ -36,7 +36,7 @@ final class JfrItemAccess {
         }
     }
 
-    static Long durationNs(IItem item) {
+    public static Long durationNs(IItem item) {
         for (String field : List.of("duration", "parkedTime", "blockedTime", "waitTime")) {
             Long value = quantityLong(item, field);
             if (value != null && value > 0) {
@@ -46,7 +46,7 @@ final class JfrItemAccess {
         return null;
     }
 
-    static Long quantityLong(IItem item, String field) {
+    public static Long quantityLong(IItem item, String field) {
         IAttribute<?> attribute = findAttribute(item, field);
         if (attribute == null) {
             return null;
@@ -65,7 +65,7 @@ final class JfrItemAccess {
         return null;
     }
 
-    static String text(IItem item, String... fields) {
+    public static String text(IItem item, String... fields) {
         for (String field : fields) {
             IAttribute<?> attribute = findAttribute(item, field);
             if (attribute == null) {
@@ -80,7 +80,7 @@ final class JfrItemAccess {
         return null;
     }
 
-    static String stackTrace(IItem item) {
+    public static String stackTrace(IItem item) {
         IAttribute<?> attribute = findAttribute(item, "stackTrace");
         if (attribute == null) {
             return null;
@@ -102,7 +102,7 @@ final class JfrItemAccess {
         return builder.length() == 0 ? null : builder.toString();
     }
 
-    static long allocationBytes(IItem item) {
+    public static long allocationBytes(IItem item) {
         for (String field : List.of("allocationSize", "size", "weight", "tlabSize")) {
             Long bytes = quantityLong(item, field);
             if (bytes != null && bytes > 0) {

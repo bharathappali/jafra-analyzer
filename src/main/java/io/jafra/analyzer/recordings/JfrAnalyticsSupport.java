@@ -1,0 +1,262 @@
+package io.jafra.analyzer.recordings;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.openjdk.jmc.common.item.IItem;
+import org.openjdk.jmc.common.item.IItemCollection;
+import org.openjdk.jmc.common.item.IItemIterable;
+import org.openjdk.jmc.common.item.ItemFilters;
+
+import io.jafra.analyzer.recordings.analytics.AnalyticsModels;
+
+/** Shared JFR analytics helpers for aggregation and analytics APIs. */
+public final class JfrAnalyticsSupport {
+    public static final long CONTENTION_MIN_NS = 20_000_000L;
+
+    public static final List<String> GC_PAUSE_TYPES = List.of(
+            "jdk.GCPhasePause",
+            "jdk.GCPhasePauseLevel1",
+            "jdk.GCPhasePauseLevel2",
+            "jdk.GCPhasePauseLevel3",
+            "jdk.GCPhasePauseLevel4");
+
+    public static final List<String> YOUNG_GC_TYPES = List.of("jdk.YoungGarbageCollection", "jdk.G1GarbageCollection");
+
+    public static final List<String> ALLOCATION_TYPES = List.of(
+            "jdk.ObjectAllocationInNewTLAB",
+            "jdk.ObjectAllocationOutsideTLAB",
+            "jdk.ObjectAllocationSample",
+            "profiler.ObjectAllocationInNewTLAB",
+            "profiler.ObjectAllocationOutsideTLAB");
+
+    public static final List<String> CPU_SAMPLE_TYPES = List.of(
+            "jdk.ExecutionSample", "jdk.NativeMethodSample", "profiler.ExecutionSample");
+
+    public static final List<String> WALL_SAMPLE_TYPES = List.of("profiler.WallClockSample", "profiler.ExecutionSample");
+
+    public static final List<String> CONTENTION_TYPES = List.of(
+            "jdk.JavaMonitorEnter", "jdk.JavaMonitorWait", "jdk.ThreadPark", "profiler.NativeLock");
+
+    public static final List<String> EXCEPTION_TYPES = List.of("jdk.JavaExceptionThrow", "jdk.JavaErrorThrow");
+
+    private JfrAnalyticsSupport() {}
+
+    public static List<String> present(List<String> candidates, Set<String> available) {
+        List<String> types = new ArrayList<>();
+        for (String typeId : candidates) {
+            if (available.contains(typeId)) {
+                types.add(typeId);
+            }
+        }
+        return types;
+    }
+
+    public static AnalyticsModels.Availability availability(List<String> expected, Set<String> available) {
+        List<String> seen = new ArrayList<>();
+        for (String type : expected) {
+            if (available.contains(type)) {
+                seen.add(type);
+            }
+        }
+        String status;
+        if (seen.isEmpty()) {
+            status = AnalyticsModels.AVAIL_ABSENT;
+        } else if (seen.size() == expected.size()) {
+            status = AnalyticsModels.AVAIL_PRESENT;
+        } else {
+            status = AnalyticsModels.AVAIL_PARTIAL;
+        }
+        return new AnalyticsModels.Availability(status, expected, seen);
+    }
+
+    public static void collectPauseDurations(IItemCollection events, String typeId, List<Long> pauseNs) {
+        for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
+            for (IItem item : iterable) {
+                Long duration = JfrItemAccess.durationNs(item);
+                if (duration != null && duration > 0) {
+                    pauseNs.add(duration);
+                }
+            }
+        }
+    }
+
+    public static Map<String, Object> pauseStats(List<Long> pauseNs) {
+        Map<String, Object> stats = new LinkedHashMap<>();
+        if (pauseNs.isEmpty()) {
+            stats.put("count", 0L);
+            stats.put("sumMs", 0.0);
+            stats.put("maxMs", 0.0);
+            stats.put("p50Ms", 0.0);
+            stats.put("p95Ms", 0.0);
+            stats.put("p99Ms", 0.0);
+            return stats;
+        }
+        List<Long> sorted = new ArrayList<>(pauseNs);
+        Collections.sort(sorted);
+        long sum = 0L;
+        for (long value : sorted) {
+            sum += value;
+        }
+        stats.put("count", (long) sorted.size());
+        stats.put("sumMs", sum / 1_000_000.0);
+        stats.put("maxMs", sorted.getLast() / 1_000_000.0);
+        stats.put("p50Ms", percentileMs(sorted, 0.50));
+        stats.put("p95Ms", percentileMs(sorted, 0.95));
+        stats.put("p99Ms", percentileMs(sorted, 0.99));
+        return stats;
+    }
+
+    public static double percentileMs(List<Long> sortedNs, double quantile) {
+        if (sortedNs.isEmpty()) {
+            return 0.0;
+        }
+        int index = Math.min(sortedNs.size() - 1, (int) Math.ceil(sortedNs.size() * quantile) - 1);
+        return sortedNs.get(Math.max(0, index)) / 1_000_000.0;
+    }
+
+    public static long countEvents(IItemCollection events, String typeId) {
+        long count = 0L;
+        for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
+            for (IItem ignored : iterable) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static void rankStacks(
+            IItemCollection events, List<String> typeIds, Map<String, MutableRank> byStack, long weightPerSample) {
+        for (String typeId : typeIds) {
+            for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
+                for (IItem item : iterable) {
+                    String stack = JfrItemAccess.stackTrace(item);
+                    if (stack == null) {
+                        continue;
+                    }
+                    bump(byStack, "stack", stack, stack, weightPerSample, 0L);
+                }
+            }
+        }
+    }
+
+    public static void rankAllocations(
+            IItemCollection events, List<String> typeIds, Map<String, MutableRank> byClass, Map<String, MutableRank> byStack) {
+        for (String typeId : typeIds) {
+            for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
+                for (IItem item : iterable) {
+                    long bytes = JfrItemAccess.allocationBytes(item);
+                    String clazz = JfrItemAccess.text(item, "objectClass", "class");
+                    if (clazz == null) {
+                        clazz = "(unknown)";
+                    }
+                    bump(byClass, "class", clazz, null, bytes, 0L);
+                    String stack = JfrItemAccess.stackTrace(item);
+                    if (stack != null) {
+                        bump(byStack, "stack", stack, stack, bytes, 0L);
+                    }
+                }
+            }
+        }
+    }
+
+    public static List<JfrAggregationService.RankedEntry> topRanks(Map<String, MutableRank> ranks, int top) {
+        List<MutableRank> sorted = new ArrayList<>(ranks.values());
+        sorted.sort(Comparator.comparingLong((MutableRank rank) -> rank.bytes + rank.count + rank.totalNs)
+                .reversed());
+        List<JfrAggregationService.RankedEntry> entries = new ArrayList<>();
+        for (int index = 0; index < sorted.size() && index < top; index++) {
+            entries.add(sorted.get(index).toEntry());
+        }
+        return entries;
+    }
+
+    public static double linearSlopePerHour(List<long[]> points) {
+        if (points.size() < 2) {
+            return 0.0;
+        }
+        double sumX = 0.0;
+        double sumY = 0.0;
+        double sumXY = 0.0;
+        double sumXX = 0.0;
+        int n = points.size();
+        for (long[] point : points) {
+            double x = point[0] / 1_000_000_000.0;
+            double y = point[1];
+            sumX += x;
+            sumY += y;
+            sumXY += x * y;
+            sumXX += x * x;
+        }
+        double denom = n * sumXX - sumX * sumX;
+        if (denom == 0.0) {
+            return 0.0;
+        }
+        return ((n * sumXY - sumX * sumY) / denom) * 3600.0;
+    }
+
+    public static Map<String, Object> numericSummary(List<Double> values) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        if (values.isEmpty()) {
+            map.put("count", 0L);
+            return map;
+        }
+        double sum = 0.0;
+        double min = Double.MAX_VALUE;
+        double max = -Double.MAX_VALUE;
+        for (double v : values) {
+            sum += v;
+            min = Math.min(min, v);
+            max = Math.max(max, v);
+        }
+        List<Double> sorted = new ArrayList<>(values);
+        Collections.sort(sorted);
+        map.put("count", (long) values.size());
+        map.put("mean", sum / values.size());
+        map.put("min", min);
+        map.put("max", max);
+        map.put("p50", sorted.get(sorted.size() / 2));
+        map.put("p95", sorted.get(Math.min(sorted.size() - 1, (int) (sorted.size() * 0.95))));
+        return map;
+    }
+
+    public static void bump(
+            Map<String, MutableRank> ranks,
+            String group,
+            String key,
+            String stack,
+            long bytes,
+            long durationNs) {
+        MutableRank rank = ranks.computeIfAbsent(group + "\0" + key, ignored -> new MutableRank(group, key, stack));
+        rank.count++;
+        rank.bytes += bytes;
+        rank.totalNs += durationNs;
+        if (rank.stack == null && stack != null) {
+            rank.stack = stack;
+        }
+    }
+
+    public static final class MutableRank {
+        public final String group;
+        public final String key;
+        public String stack;
+        public long count;
+        public long bytes;
+        public long totalNs;
+
+        MutableRank(String group, String key, String stack) {
+            this.group = group;
+            this.key = key;
+            this.stack = stack;
+        }
+
+        JfrAggregationService.RankedEntry toEntry() {
+            return new JfrAggregationService.RankedEntry(group, key, stack, count, bytes, totalNs);
+        }
+    }
+}
