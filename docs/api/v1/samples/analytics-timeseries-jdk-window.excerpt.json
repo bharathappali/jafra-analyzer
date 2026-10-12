@@ -1,0 +1,397 @@
+{
+  "schemaVersion": 1,
+  "mode": "timeseries",
+  "context": {
+    "namespace": "default",
+    "pod": "auth-cache-84cd9fbc49-fttcq",
+    "container": "auth-cache",
+    "start": "2026-09-12T12:43:20.137106Z",
+    "end": "2026-09-13T09:49:33.919871779Z",
+    "from": "2026-09-12T00:00:00Z",
+    "to": "2026-09-14T00:00:00Z",
+    "bytes": 2155388,
+    "chunks": 15,
+    "generatedAt": "2026-10-12T08:58:00.529642Z"
+  },
+  "dataQuality": {
+    "windowDurationSeconds": 172800,
+    "chunkCount": 15,
+    "bytesLoaded": 2155388,
+    "coveragePercent": 43.96585648148148,
+    "gaps": [
+      {
+        "from": "2026-09-12T00:00:00Z",
+        "to": "2026-09-12T12:43:20.137106Z",
+        "reason": "no_chunks_before_data"
+      },
+      {
+        "from": "2026-09-13T09:49:33.919871779Z",
+        "to": "2026-09-14T00:00:00Z",
+        "reason": "no_chunks_after_data"
+      }
+    ],
+    "eventTypeCount": 196,
+    "profilerPresent": true,
+    "jdkPeriodicPresent": true
+  },
+  "subsystems": {
+    "heap": {
+      "id": "heap",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "jdk.GCHeapSummary",
+          "jdk.MetaspaceSummary",
+          "jdk.ResidentSetSize"
+        ],
+        "eventTypesSeen": [
+          "jdk.GCHeapSummary",
+          "jdk.MetaspaceSummary",
+          "jdk.ResidentSetSize"
+        ]
+      },
+      "rollup": {
+        "heapUsed": {
+          "count": 10,
+          "mean": 190716268.8,
+          "min": 8626840.0,
+          "max": 383188976.0,
+          "p50": 168029128.0,
+          "p95": 383188976.0
+        },
+        "rss": {
+          "count": 240,
+          "mean": 581014528.0,
+          "min": 578252800.0,
+          "max": 584552448.0,
+          "p50": 582279168.0,
+          "p95": 584552448.0
+        },
+        "heapUsedSlopePerHour": -6991880.502758047,
+        "metaspaceUsedSlopePerHour": 0.0,
+        "heapVsRssGapMeanBytes": 390298259.2
+      },
+      "series": [
+        {
+          "id": "heapUsedBytes",
+          "label": "Heap used",
+          "unit": "bytes",
+          "description": "Rising post-GC plateau may indicate retention or leak.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        },
+        {
+          "id": "rssBytes",
+          "label": "RSS",
+          "unit": "bytes",
+          "description": "RSS growth with flat heap may indicate native memory.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        }
+      ],
+      "evidence": {},
+      "notes": [
+        "Use with native_memory when RSS diverges from heap."
+      ]
+    },
+    "container": {
+      "id": "container",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "jdk.ContainerCPUThrottling",
+          "jdk.ContainerMemoryUsage",
+          "jdk.CPULoad"
+        ],
+        "eventTypesSeen": [
+          "jdk.ContainerCPUThrottling",
+          "jdk.ContainerMemoryUsage",
+          "jdk.CPULoad"
+        ]
+      },
+      "rollup": {
+        "cpuThrottledTimeDeltaNs": 2355069000,
+        "memoryUsage": {
+          "count": 8,
+          "mean": 563015680.0,
+          "min": 559886336.0,
+          "max": 567242752.0,
+          "p50": 563904512.0,
+          "p95": 567242752.0
+        }
+      },
+      "series": [
+        {
+          "id": "memoryUsageBytes",
+          "label": "Container memory",
+          "unit": "bytes",
+          "description": " cgroup memory usage.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        }
+      ],
+      "evidence": {},
+      "notes": [
+        "Throttling with low JVM CPU suggests cgroup quota limits."
+      ]
+    },
+    "cpu": {
+      "id": "cpu",
+      "availability": {
+        "status": "partial",
+        "eventTypesExpected": [
+          "jdk.ExecutionSample",
+          "jdk.CPULoad",
+          "jdk.ThreadCPULoad",
+          "profiler.ExecutionSample"
+        ],
+        "eventTypesSeen": [
+          "jdk.ExecutionSample",
+          "jdk.CPULoad",
+          "jdk.ThreadCPULoad"
+        ]
+      },
+      "rollup": {
+        "cpuSampleCount": 114,
+        "jvmCpu": {
+          "count": 240,
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "machineTotal": {
+          "count": 240,
+          "mean": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        }
+      },
+      "series": [
+        {
+          "id": "jvmCpuPercent",
+          "label": "JVM CPU",
+          "unit": "percent",
+          "description": "High value suggests the JVM process is using CPU time.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        },
+        {
+          "id": "machineTotalPercent",
+          "label": "Machine CPU",
+          "unit": "percent",
+          "description": "High value with low JVM CPU suggests other processes or system load.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        },
+        {
+          "id": "cpuSampleRatePerSec",
+          "label": "CPU samples",
+          "unit": "samples/s",
+          "description": "Sampling rate of on-CPU stack events.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "value": 0.0,
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "value": 0.0,
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        }
+      ],
+      "evidence": {
+        "topStacks": [
+          {
+            "stack": " .forward_copy_longs()\n .arrayof_oop_disjoint_arraycopy()\nvoid java.util.ArrayList.fastRemove(java.lang.Object[], int)\njava.lang.Object java.util.ArrayList.removeFirst()\nvoid ai.causa.memory.retention.RetainedHeap.releaseHalf()\nvoid ai.causa.memory.retention.RetainedHeap_ClientProxy.releaseHalf()\nvoid ai.causa.scenario.impl.PromotionPressureScenario.execute(ai.causa.engine.Phase)\nvoid ai.causa.scenario.impl.PromotionPressureScenario_ClientProxy.execute(ai.causa.engine.Phase)\nvoid ai.causa.engine.ScenarioScheduler.tick()\nvoid ai.causa.engine.ScenarioScheduler_ClientProxy.tick()\njava.util.concurrent.CompletionStage ai.causa.engine.ScenarioScheduler_ScheduledInvoker_tick_4426acd0a1c9e0be9355dc544b768fa577f44883.invokeBean(io.quarkus.scheduler.ScheduledExecution)\njava.util.concurrent.CompletionStage io.quarkus.scheduler.common.runtime.DefaultInvoker.invoke(io.quarkus.scheduler.ScheduledExecution)\njava.util.concurrent.CompletionStage io.quarkus.scheduler.common.runtime.DelegateInvoker.invokeDelegate(io.quarkus.scheduler.ScheduledExecution)\njava.util.concurrent.CompletionStage io.quarkus.scheduler.common.runtime.StatusEmitterInvoker.invoke(io.quarkus.scheduler.ScheduledExecution)\njava.util.concurrent.CompletionStage io.quarkus.scheduler.common.runtime.DelegateInvoker.invokeDelegate(io.quarkus.scheduler.ScheduledExecution)\nvoid io.quarkus.scheduler.common.runtime.DelegateInvoker.invokeComplete(java.util.concurrent.CompletableFuture, io.quarkus.scheduler.ScheduledExecution)\njava.lang.Void io.quarkus.scheduler.common.runtime.OffloadingInvoker$2.call()\njava.lang.Object io.quarkus.scheduler.common.runtime.OffloadingInvoker$2.call()\nvoid io.vertx.core.impl.ContextImpl.lambda$executeBlocking$4(java.util.concurrent.Callable, io.vertx.core.Promise)\nvoid io.vertx.core.impl.ContextImpl$$Lambda.0x0000003001396af0.handle(java.lang.Object)\nvoid io.vertx.core.impl.ContextInternal.dispatch(java.lang.Object, io.vertx.core.Handler)\nvoid io.vertx.core.impl.ContextImpl$1.execute()\nvoid io.vertx.core.impl.WorkerTask.run()\nvoid io.quarkus.vertx.core.runtime.VertxCoreRecorder$15.runWith(java.lang.Runnable, java.lang.Object)\nvoid org.jboss.threads.EnhancedQueueExecutor$Task.doRunWith(java.lang.Runnable, java.lang.Object)\nvoid org.jboss.threads.EnhancedQueueExecutor$Task.run()\nvoid org.jboss.threads.EnhancedQueueExecutor.runThreadBody()\nvoid org.jboss.threads.EnhancedQueueExecutor$ThreadBody.run()\nvoid org.jboss.threads.DelegatingRunnable.run()\nvoid org.jboss.threads.ThreadLocalResettingRunnable.run()\nvoid io.netty.util.concurrent.FastThreadLocalRunnable.run()\nvoid java.lang.Thread.runWith(java.lang.Object, java.lang.Runnable)\nvoid java.lang.Thread.run()",
+            "sampleCount": 37,
+            "percentOfCpuSamples": 32.45614035087719
+          },
+          {
+            "stack": " libjvm.so.LinearScan::allocate_registers()\n libjvm.so.LinearScan::do_linear_scan()\n libjvm.so.Compilation::emit_lir()\n libjvm.so.Compilation::compile_java_method()\n libjvm.so.Compilation::compile_method()\n libjvm.so.Compilation::Compilation()\n libjvm.so.Compiler::compile_method()\n libjvm.so.CompileBroker::invoke_compiler_on_method()\n libjvm.so.CompileBroker::compiler_thread_loop()\n libjvm.so.JavaThread::thread_main_inner()\n libjvm.so.Thread::call_run()\n libjvm.so.thread_native_entry()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()",
+            "sampleCount": 2,
+            "percentOfCpuSamples": 1.7543859649122806
+          }
+        ]
+      },
+      "notes": [
+        "Compare with wall_time when latency exceeds CPU hotspots."
+      ]
+    },
+    "gc": {
+      "id": "gc",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "jdk.GCPhasePause",
+          "jdk.GarbageCollection"
+        ],
+        "eventTypesSeen": [
+          "jdk.GCPhasePause",
+          "jdk.GarbageCollection"
+        ]
+      },
+      "rollup": {
+        "count": 34,
+        "sumMs": 1943.865125,
+        "maxMs": 494.561566,
+        "p50Ms": 0.629084,
+        "p95Ms": 444.132858,
+        "p99Ms": 494.561566,
+        "youngGcCount": 2,
+        "youngGcPerHour": 0.041666666666666664,
+        "pauseTimePercentOfWindow": 0.001124921947337963
+      },
+      "series": [
+        {
+          "id": "pauseSumMsPerBucket",
+          "label": "GC pause sum",
+          "unit": "ms",
+          "description": "Sum of pause durations per bucket.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        },
+        {
+          "id": "youngGcCountPerBucket",
+          "label": "Young GC events",
+          "unit": "count",
+          "description": "Young collections per bucket.",
+          "points": [
+            {
+              "at": "2026-09-12T00:00:00Z",
+              "value": 0.0,
+              "count": 0
+            },
+            {
+              "at": "2026-09-12T00:40:00Z",
+              "value": 0.0,
+              "count": 0
+            },
+            {
+              "_truncated": 70
+            }
+          ]
+        }
+      ],
+      "evidence": {
+        "longestPauses": [
+          {
+            "at": "2026-09-13T09:49:20.954228094Z",
+            "durationMs": 494.561566,
+            "type": "jdk.GCPhasePause"
+          },
+          {
+            "at": "2026-09-13T09:49:20.995555204Z",
+            "durationMs": 444.132858,
+            "type": "jdk.GCPhasePauseLevel1"
+          }
+        ]
+      },
+      "notes": [
+        "Align pause timestamps with allocation and wall_time series."
+      ]
+    }
+  },
+  "correlations": {
+    "cpuVsWall": {
+      "status": "insufficient_data"
+    },
+    "heapVsRss": {
+      "status": "ok",
+      "heapUsedSlopePerHour": -6991880.502758047,
+      "rssSlopeProxy": -6991880.502758047,
+      "heapVsRssGapMeanBytes": 390298259.2,
+      "divergenceNote": "Positive gap with rising RSS and flat heap suggests native/off-heap growth."
+    },
+    "stackIntersections": {
+      "status": "ok",
+      "cpuWallAlloc": []
+    },
+    "allocVsGc": {
+      "status": "insufficient_data"
+    },
+    "jvmVsMachineCpu": {
+      "status": "ok",
+      "note": "See subsystem rollups and series for cpu rollup; cross-align timestamps manually if needed."
+    },
+    "throttleVsLatencyProxy": {
+      "status": "ok",
+      "note": "See subsystem rollups and series for container and wall_time; cross-align timestamps manually if needed."
+    }
+  }
+}

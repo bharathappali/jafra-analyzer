@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "mode": "daily_stats",
+  "context": {
+    "namespace": "default",
+    "pod": "auth-cache-84cd9fbc49-fttcq",
+    "container": "auth-cache",
+    "start": "2026-09-12T12:43:20.137106Z",
+    "end": "2026-09-13T09:49:33.919871779Z",
+    "from": "2026-09-12T00:00:00Z",
+    "to": "2026-09-14T00:00:00Z",
+    "bytes": 2155388,
+    "chunks": 15,
+    "generatedAt": "2026-10-12T08:58:00.580742Z"
+  },
+  "dataQuality": {
+    "windowDurationSeconds": 172800,
+    "chunkCount": 15,
+    "bytesLoaded": 2155388,
+    "coveragePercent": 43.96585648148148,
+    "gaps": [
+      {
+        "from": "2026-09-12T00:00:00Z",
+        "to": "2026-09-12T12:43:20.137106Z",
+        "reason": "no_chunks_before_data"
+      },
+      {
+        "from": "2026-09-13T09:49:33.919871779Z",
+        "to": "2026-09-14T00:00:00Z",
+        "reason": "no_chunks_after_data"
+      }
+    ],
+    "eventTypeCount": 196,
+    "profilerPresent": true,
+    "jdkPeriodicPresent": true
+  },
+  "subsystems": {
+    "context": {
+      "id": "context",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "jdk.JVMInformation",
+          "jdk.GCConfiguration",
+          "jdk.ContainerConfiguration",
+          "jdk.ActiveRecording"
+        ],
+        "eventTypesSeen": [
+          "jdk.JVMInformation",
+          "jdk.GCConfiguration",
+          "jdk.ContainerConfiguration",
+          "jdk.ActiveRecording"
+        ]
+      },
+      "rollup": {
+        "jvm": {
+          "jdkVersion": null,
+          "vmName": "OpenJDK 64-Bit Server VM",
+          "gcName": null,
+          "memoryLimit": null,
+          "containerType": null,
+          "effectiveCpuCount": null
+        },
+        "gcConfiguration": {
+          "jdkVersion": null,
+          "vmName": null,
+          "gcName": null,
+          "memoryLimit": null,
+          "containerType": null,
+          "effectiveCpuCount": null
+        },
+        "heapConfiguration": {
+          "jdkVersion": null,
+          "vmName": null,
+          "gcName": null,
+          "memoryLimit": null,
+          "containerType": null,
+          "effectiveCpuCount": null
+        },
+        "containerConfiguration": {
+          "jdkVersion": null,
+          "vmName": null,
+          "gcName": null,
+          "memoryLimit": "1073741824B[B]",
+          "containerType": "cgroupv2",
+          "effectiveCpuCount": "1"
+        },
+        "os": {
+          "jdkVersion": null,
+          "vmName": null,
+          "gcName": null,
+          "memoryLimit": null,
+          "containerType": null,
+          "effectiveCpuCount": null
+        },
+        "eventTypesProfiler": 10,
+        "eventTypesJdk": 186
+      },
+      "evidence": {},
+      "notes": [
+        "Baseline JVM and platform context for interpreting other subsystems."
+      ]
+    },
+    "native_memory": {
+      "id": "native_memory",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "profiler.Malloc",
+          "profiler.Free",
+          "profiler.LiveObject"
+        ],
+        "eventTypesSeen": [
+          "profiler.Malloc",
+          "profiler.Free",
+          "profiler.LiveObject"
+        ]
+      },
+      "rollup": {
+        "mallocCount": 55,
+        "freeCount": 45041,
+        "mallocBytesTotal": 7507959,
+        "mallocBytesPerSec": 7507959.0,
+        "freeEventsPerSec": 45041.0
+      },
+      "evidence": {
+        "top": [
+          {
+            "group": "stack",
+            "key": " libasyncProfiler.so.malloc_hook()\n libjvm.so.os::malloc()\n libjvm.so.Chunk::operator new()\n libjvm.so.Arena::grow()\n libjvm.so.PhaseIdealLoop::Dominators()\n libjvm.so.PhaseIdealLoop::build_and_optimize()\n libjvm.so.PhaseIdealLoop::optimize()\n libjvm.so.Compile::Optimize()\n libjvm.so.Compile::Compile()\n libjvm.so.C2Compiler::compile_method()\n libjvm.so.CompileBroker::invoke_compiler_on_method()\n libjvm.so.CompileBroker::compiler_thread_loop()\n libjvm.so.JavaThread::thread_main_inner()\n libjvm.so.Thread::call_run()\n libjvm.so.thread_native_entry()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()",
+            "count": 13,
+            "bytes": 3533808,
+            "totalNs": 0,
+            "stack": " libasyncProfiler.so.malloc_hook()\n libjvm.so.os::malloc()\n libjvm.so.Chunk::operator new()\n libjvm.so.Arena::grow()\n libjvm.so.PhaseIdealLoop::Dominators()\n libjvm.so.PhaseIdealLoop::build_and_optimize()\n libjvm.so.PhaseIdealLoop::optimize()\n libjvm.so.Compile::Optimize()\n libjvm.so.Compile::Compile()\n libjvm.so.C2Compiler::compile_method()\n libjvm.so.CompileBroker::invoke_compiler_on_method()\n libjvm.so.CompileBroker::compiler_thread_loop()\n libjvm.so.JavaThread::thread_main_inner()\n libjvm.so.Thread::call_run()\n libjvm.so.thread_native_entry()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()"
+          },
+          {
+            "group": "stack",
+            "key": " libasyncProfiler.so.malloc_hook()\n libjvm.so.os::malloc()\n libjvm.so.Chunk::operator new()\n libjvm.so.Arena::grow()\n libjvm.so.PhaseIdealLoop::Dominators()\n libjvm.so.PhaseIdealLoop::build_and_optimize()\n libjvm.so.Compile::Optimize()\n libjvm.so.Compile::Compile()\n libjvm.so.C2Compiler::compile_method()\n libjvm.so.CompileBroker::invoke_compiler_on_method()\n libjvm.so.CompileBroker::compiler_thread_loop()\n libjvm.so.JavaThread::thread_main_inner()\n libjvm.so.Thread::call_run()\n libjvm.so.thread_native_entry()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()",
+            "count": 6,
+            "bytes": 1488656,
+            "totalNs": 0,
+            "stack": " libasyncProfiler.so.malloc_hook()\n libjvm.so.os::malloc()\n libjvm.so.Chunk::operator new()\n libjvm.so.Arena::grow()\n libjvm.so.PhaseIdealLoop::Dominators()\n libjvm.so.PhaseIdealLoop::build_and_optimize()\n libjvm.so.Compile::Optimize()\n libjvm.so.Compile::Compile()\n libjvm.so.C2Compiler::compile_method()\n libjvm.so.CompileBroker::invoke_compiler_on_method()\n libjvm.so.CompileBroker::compiler_thread_loop()\n libjvm.so.JavaThread::thread_main_inner()\n libjvm.so.Thread::call_run()\n libjvm.so.thread_native_entry()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()\n ./usr/lib/aarch64-linux-gnu/libc.so.6()"
+          }
+        ]
+      },
+      "notes": [
+        "High free churn may include profiler hook overhead."
+      ]
+    },
+    "threads": {
+      "id": "threads",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "jdk.JavaThreadStatistics",
+          "jdk.ThreadStart",
+          "jdk.ThreadAllocationStatistics"
+        ],
+        "eventTypesSeen": [
+          "jdk.JavaThreadStatistics",
+          "jdk.ThreadStart",
+          "jdk.ThreadAllocationStatistics"
+        ]
+      },
+      "rollup": {
+        "liveThreads": {
+          "count": 240,
+          "mean": 15.0,
+          "min": 15.0,
+          "max": 15.0,
+          "p50": 15.0,
+          "p95": 15.0
+        },
+        "contextSwitchRate": {
+          "count": 24,
+          "mean": 63704.0,
+          "min": 59924.0,
+          "max": 66687.0,
+          "p50": 64210.0,
+          "p95": 65525.0
+        },
+        "threadStartCount": 4,
+        "threadEndCount": 8
+      },
+      "evidence": {},
+      "notes": [
+        "Pair with locks and wall_time for pool exhaustion."
+      ]
+    },
+    "io": {
+      "id": "io",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "jdk.FileRead",
+          "jdk.SocketRead",
+          "jdk.ContainerIOUsage"
+        ],
+        "eventTypesSeen": [
+          "jdk.FileRead",
+          "jdk.SocketRead",
+          "jdk.ContainerIOUsage"
+        ]
+      },
+      "rollup": {
+        "ioOperationCount": 1,
+        "ioDurationSumMs": 305.084151,
+        "containerIoBytesDelta": 886294016
+      },
+      "evidence": {},
+      "notes": [
+        "Sparse IO events are common; correlate slow reads with wall_time."
+      ]
+    },
+    "heap": {
+      "id": "heap",
+      "availability": {
+        "status": "present",
+        "eventTypesExpected": [
+          "jdk.GCHeapSummary",
+          "jdk.MetaspaceSummary",
+          "jdk.ResidentSetSize"
+        ],
+        "eventTypesSeen": [
+          "jdk.GCHeapSummary",
+          "jdk.MetaspaceSummary",
+          "jdk.ResidentSetSize"
+        ]
+      },
+      "rollup": {
+        "heapUsed": {
+          "count": 10,
+          "mean": 190716268.8,
+          "min": 8626840.0,
+          "max": 383188976.0,
+          "p50": 168029128.0,
+          "p95": 383188976.0
+        },
+        "rss": {
+          "count": 240,
+          "mean": 581014528.0,
+          "min": 578252800.0,
+          "max": 584552448.0,
+          "p50": 582279168.0,
+          "p95": 584552448.0
+        },
+        "heapUsedSlopePerHour": -6991880.502758047,
+        "metaspaceUsedSlopePerHour": 0.0,
+        "heapVsRssGapMeanBytes": 390298259.2
+      },
+      "evidence": {},
+      "notes": [
+        "Use with native_memory when RSS diverges from heap."
+      ]
+    }
+  },
+  "_note": "truncated to subsystems ['context', 'native_memory', 'threads', 'io', 'heap']; full response has 14 subsystems"
+}

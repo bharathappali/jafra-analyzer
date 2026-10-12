@@ -54,6 +54,11 @@ Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 `GET /q/health`, `GET /q/metrics`). Status includes `durableChunks` and
 `stitchedBytes` (always `0`; kept so older clients still parse the JSON).
 
+## HTTP API reference
+
+Granular v1 documentation with golden-fixture sample JSON lives under
+[`docs/api/v1/`](docs/api/v1/README.md).
+
 ## Summary APIs
 
 Recordings are indexed by **namespace**, **pod name**, and **container**.
