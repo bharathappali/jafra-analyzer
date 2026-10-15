@@ -39,10 +39,11 @@ required.
 
 ## Deploy
 
+From the **jafra-io** repository root:
+
 ```bash
-kind load docker-image quay.io/bharathappali/jafra-analyzer:0.0.2 --name jafra
-kubectl apply -f deploy/analyzer/deployment.yaml
-kubectl rollout status deployment/jafra-analyzer -n jafra-system
+export JAFRA_VERSION=0.0.2   # optional
+./install-jafra.sh            # or ./pull-jafra.sh from published images
 kubectl logs -n jafra-system deployment/jafra-analyzer
 kubectl exec -n jafra-system deploy/jafra-analyzer -- ls -la /var/lib/jafra/analyzer
 ```
