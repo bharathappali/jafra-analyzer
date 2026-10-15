@@ -88,6 +88,13 @@ class AnalyticsApiGoldenTest {
                 .get("/api/v1/stacks/0000000000000000")
                 .then()
                 .statusCode(404);
+
+        io.restassured.RestAssured.given()
+                .queryParam("depth", 0)
+                .when()
+                .get("/api/v1/stacks/" + stackId)
+                .then()
+                .statusCode(400);
     }
 
     @Test
@@ -112,6 +119,10 @@ class AnalyticsApiGoldenTest {
                 .statusCode(200)
                 .body("mode", equalTo("daily_stats"))
                 .body("subsystems.gc", hasKey("rollup"))
-                .body("subsystems.gc.series", equalTo(null));
+                .body("subsystems.gc.series", equalTo(null))
+                .body("correlations.allocVsGc.status", equalTo("insufficient_data"))
+                .body("correlations.allocVsGc", not(hasKey("note")))
+                .body("correlations.jvmVsMachineCpu", not(hasKey("note")))
+                .body("correlations.throttleVsRunnableWithoutCpu", not(hasKey("note")));
     }
 }

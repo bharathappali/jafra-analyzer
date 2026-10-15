@@ -4,6 +4,7 @@ import static io.jafra.analyzer.test.GoldenWorkloadQuery.workloadWindow;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,6 +70,23 @@ class AggregationApiGoldenTest {
                 .body("kind", equalTo("samples"))
                 .body("stats.sampleCount", greaterThan(0))
                 .body("top.find { it.group == 'stack' }.stack", notNullValue());
+    }
+
+    @Test
+    void samplesCanReturnStackIds() {
+        workloadWindow()
+                .queryParam("flavor", "cpu")
+                .queryParam("limit", 5)
+                .queryParam("stacks", "ids")
+                .when()
+                .get("/api/v1/aggregations/samples")
+                .then()
+                .statusCode(200)
+                .body("top.find { it.group == 'stack' }.stack", nullValue())
+                .body("top.find { it.group == 'stack' }.stackId", notNullValue())
+                .body("top.find { it.group == 'stack' }.leaf", notNullValue())
+                .body("top.find { it.group == 'stack' }.topAppFrame", notNullValue())
+                .body("top.find { it.group == 'stack' }.depth", notNullValue());
     }
 
     @Test
