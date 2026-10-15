@@ -1,0 +1,706 @@
+package io.jafra.analyzer.api.v2;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+import io.jafra.analyzer.ingest.decode.ParquetTables;
+import io.jafra.analyzer.metrics.MetricRegistry;
+
+/** Reads the v2 Parquet tables. Heap, findings, and signals stay unavailable until later cuts. */
+public final class V2ReadService {
+    private static final long LIVE_NS = 120_000_000_000L;
+    private static final List<String> OVERVIEW = List.of(
+            "cpu", "container", "gc", "heap", "alloc", "jit", "safepoint", "native_memory", "locks", "threads", "io",
+            "network", "exceptions", "class_loading");
+
+    private final Connection connection;
+    private final Path root;
+
+    public V2ReadService(Connection connection, Path root) {
+        this.connection = connection;
+        this.root = root;
+    }
+
+    public Map<String, Object> workloads(Instant now, boolean includeTombstoned) throws SQLException {
+        List<InstanceRow> rows = new ArrayList<>();
+        String glob = files("jvm_instance", "");
+        if (glob != null) {
+            String sql = "SELECT namespace, pod, container, jvm_instance_id, "
+                    + "arg_max(pod_uid, t), arg_max(instance_seq, t), arg_max(jvm_start, t), arg_max(pid, t), "
+                    + "arg_max(jdk_version, t), arg_max(restart_reason_hint, t), min(t), max(t) "
+                    + "FROM read_parquet('" + glob + "', hive_partitioning=false) GROUP BY 1, 2, 3, 4";
+            try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+                while (result.next()) {
+                    rows.add(new InstanceRow(
+                            result.getString(1), result.getString(2), result.getString(3), result.getString(4),
+                            result.getString(5), result.getInt(6), result.getLong(7), result.getLong(8),
+                            result.getString(9), result.getString(10), result.getLong(11), result.getLong(12)));
+                }
+            }
+        }
+        return tree(rows, now.toEpochMilli() * 1_000_000L);
+    }
+
+    public String latestInstance(String ns, String pod, String container) throws SQLException {
+        String glob = files("jvm_instance", partition(ns, pod, container, null));
+        if (glob == null) {
+            return null;
+        }
+        String sql = "SELECT jvm_instance_id FROM read_parquet('" + glob + "', hive_partitioning=false) "
+                + "ORDER BY jvm_start DESC, t DESC LIMIT 1";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            return result.next() ? result.getString(1) : null;
+        }
+    }
+
+    public Map<String, Object> series(Identity id, V2Window.Range range, String requestedStep, String metrics, boolean compact)
+            throws SQLException {
+        List<MetricRef> refs = metrics(metrics);
+        String nativePeriod = coarsestNative(refs);
+        V2Window.StepChoice choice = V2Window.resolveStep(requestedStep, range, nativePeriod);
+        long start = Math.floorDiv(range.fromNs(), choice.step().nanos) * choice.step().nanos;
+        long end = range.toNs();
+        List<Long> offsets = new ArrayList<>();
+        List<Long> buckets = new ArrayList<>();
+        for (long bucket = start; bucket < end && offsets.size() < 240; bucket += choice.step().nanos) {
+            buckets.add(bucket);
+            offsets.add((bucket - start) / 1_000_000_000L);
+        }
+        Map<String, Object> series = new LinkedHashMap<>();
+        boolean any = false;
+        for (MetricRef ref : refs) {
+            Map<Long, Double> values = rollup(id, choice.step(), ref, start, end);
+            List<Object> points = new ArrayList<>();
+            boolean seen = false;
+            for (Long bucket : buckets) {
+                Double value = values.get(bucket);
+                if (value == null) {
+                    points.add(null);
+                } else {
+                    seen = true;
+                    any = true;
+                    points.add(number(value, ref.unit(), compact));
+                }
+            }
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("unit", ref.unit());
+            body.put("status", seen ? "ok" : "no_data_in_window");
+            if (seen) {
+                body.put("v", points);
+            }
+            series.put(ref.name(), body);
+        }
+        Map<String, Object> response = identity(id);
+        response.put("step", choice.step().label);
+        response.put("status", choice.coarserThanRequested() ? "coarser_than_requested" : any ? "ok" : "no_data_in_window");
+        response.put("t0", start / 1_000_000L);
+        response.put("t", offsets);
+        response.put("series", series);
+        return response;
+    }
+
+    public Map<String, Object> top(Identity id, V2Window.Range range, String kind, String group, int limit, V2Window.Range compare,
+            boolean compact) throws SQLException {
+        if ("thread_group".equals(group) || "native".equals(kind)) {
+            Map<String, Object> empty = identity(id);
+            empty.put("samples", 0);
+            empty.put("status", "no_data_in_window");
+            empty.put("rows", List.of());
+            return empty;
+        }
+        List<TopRow> rows = ranks(id, range, kind, group);
+        long samples = rows.stream().mapToLong(TopRow::n).sum();
+        double total = rows.stream().mapToDouble(TopRow::weight).sum();
+        Map<String, TopRow> baseline = compare == null ? Map.of() : index(ranks(id, compare, kind, group));
+        rows.sort(Comparator.comparingDouble(TopRow::weight).reversed());
+        List<Map<String, Object>> out = new ArrayList<>();
+        double shown = 0.0;
+        int cap = Math.min(Math.max(limit, 1), 50);
+        for (TopRow row : rows) {
+            if (out.size() >= cap) {
+                break;
+            }
+            double share = total <= 0.0 ? 0.0 : row.weight() / total;
+            shown += share;
+            Map<String, Object> item = new LinkedHashMap<>();
+            String key = "stack".equals(group) ? row.stackId() : row.key();
+            item.put("key", key);
+            if (row.key() != null && !row.key().equals(key)) {
+                item.put("label", row.key());
+            }
+            item.put("share", CompactNumbers.round(share, compact));
+            item.put("ci95", CompactNumbers.round(ci(share, samples), compact));
+            item.put("value", CompactNumbers.round(row.weight(), compact));
+            if (row.stackId() != null) {
+                item.put("stack", row.stackId());
+            }
+            TopRow before = baseline.get(key);
+            if (compare != null) {
+                double beforeShare = before == null || before.weight() <= 0.0 ? 0.0 : before.weight() / Math.max(1e-9, baselineWeight(baseline));
+                item.put("before", CompactNumbers.round(beforeShare, compact));
+                item.put("after", CompactNumbers.round(share, compact));
+                item.put("z", CompactNumbers.round(z(share, samples, beforeShare, before == null ? 0 : before.n()), compact));
+            }
+            out.add(item);
+        }
+        Map<String, Object> response = identity(id);
+        response.put("samples", samples);
+        response.put("status", samples < 300 ? "insufficient_samples" : "ok");
+        response.put("rows", out);
+        response.put("others", CompactNumbers.round(Math.max(0.0, 1.0 - shown), compact));
+        return response;
+    }
+
+    public Map<String, Object> events(Identity id, V2Window.Range range, String type, Double minMs, String cursor, int limit)
+            throws SQLException {
+        int cap = Math.min(Math.max(limit, 1), 500);
+        String table = eventTable(type);
+        if (table == null) {
+            Map<String, Object> empty = identity(id);
+            empty.put("status", "no_data_in_window");
+            empty.put("rows", List.of());
+            return empty;
+        }
+        String glob = glob(table, id);
+        Map<String, Object> response = identity(id);
+        if (glob == null) {
+            response.put("status", "no_data_in_window");
+            response.put("rows", List.of());
+            return response;
+        }
+        long after = cursor == null || cursor.isBlank() ? range.fromNs() - 1 : Long.parseLong(cursor);
+        String timeColumn = "t";
+        String durColumn = "gc".equals(table) ? "sum_pause_ms" : "gc_phase".equals(table) ? "dur_ms" : "dur_ms";
+        String extra = eventFilter(type);
+        String min = minMs == null ? "" : " AND " + durColumn + " >= " + minMs;
+        String sql = "SELECT t, " + eventLabel(type) + ", " + durColumn + ", " + eventTarget(type)
+                + " FROM read_parquet('" + glob + "', hive_partitioning=false) WHERE t >= " + range.fromNs()
+                + " AND t < " + range.toNs() + " AND t > " + after + extra + min + " ORDER BY t LIMIT " + (cap + 1);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("t", result.getLong(1));
+                row.put("type", result.getString(2));
+                put(row, "dur_ms", result.getObject(3) == null ? null : result.getDouble(3));
+                put(row, "target", result.getString(4));
+                rows.add(row);
+            }
+        }
+        String next = null;
+        if (rows.size() > cap) {
+            rows = new ArrayList<>(rows.subList(0, cap));
+            next = String.valueOf(rows.get(rows.size() - 1).get("t"));
+        }
+        response.put("status", rows.isEmpty() ? "no_data_in_window" : "ok");
+        response.put("rows", rows);
+        put(response, "next_cursor", next);
+        return response;
+    }
+
+    public Map<String, Object> markers(Identity id, V2Window.Range range, String kinds, String minSeverity) throws SQLException {
+        String glob = glob("marker", id);
+        Map<String, Object> response = identity(id);
+        if (glob == null) {
+            response.put("status", "no_data_in_window");
+            response.put("markers", List.of());
+            return response;
+        }
+        int floor = severity(minSeverity == null ? "info" : minSeverity);
+        String sql = "SELECT t, t_end, kind, severity, magnitude, unit, ref FROM read_parquet('" + glob
+                + "', hive_partitioning=false) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs() + " ORDER BY t";
+        List<Map<String, Object>> rows = new ArrayList<>();
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                String kind = result.getString(3);
+                if (kinds != null && !kinds.isBlank() && !List.of(kinds.split(",")).contains(kind)) {
+                    continue;
+                }
+                if (severity(result.getString(4)) < floor) {
+                    continue;
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("t", result.getLong(1));
+                put(row, "t_end", result.getObject(2) == null ? null : result.getLong(2));
+                row.put("kind", kind);
+                row.put("severity", result.getString(4));
+                put(row, "magnitude", result.getObject(5) == null ? null : result.getDouble(5));
+                put(row, "unit", result.getString(6));
+                put(row, "ref", result.getString(7));
+                rows.add(row);
+            }
+        }
+        if (rows.size() > 500) {
+            response.put("status", "ok");
+            response.put("clustered", true);
+            response.put("buckets", cluster(rows));
+            return response;
+        }
+        response.put("status", rows.isEmpty() ? "no_data_in_window" : "ok");
+        response.put("markers", rows);
+        return response;
+    }
+
+    public Map<String, Object> stack(Identity id, String stackId, int depth) throws SQLException {
+        if (depth < 1) {
+            throw new IllegalArgumentException("depth must be at least 1");
+        }
+        String stacks = glob("stack", id);
+        String frames = glob("frame", id);
+        if (stacks == null || frames == null) {
+            return null;
+        }
+        String sql = "SELECT frames, depth FROM read_parquet('" + stacks + "', hive_partitioning=false) WHERE stack_id = '"
+                + escape(stackId) + "' LIMIT 1";
+        String joined;
+        int depthTotal;
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            if (!result.next()) {
+                return null;
+            }
+            joined = result.getString(1);
+            depthTotal = result.getInt(2);
+        }
+        List<String> ids = joined == null || joined.isBlank() ? List.of() : List.of(joined.split(","));
+        int limit = Math.min(depth, ids.size());
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (limit > 0) {
+            String in = ids.subList(0, limit).stream().map(value -> "'" + escape(value) + "'").reduce((a, b) -> a + "," + b).orElse("''");
+            Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
+            String frameSql = "SELECT frame_id, \"class\", method, category, line FROM read_parquet('" + frames
+                    + "', hive_partitioning=false) WHERE frame_id IN (" + in + ")";
+            try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(frameSql)) {
+                while (result.next()) {
+                    String className = result.getString(2);
+                    String method = result.getString(3);
+                    String label = className == null || className.isBlank() ? method : className + "." + method;
+                    Map<String, Object> frame = new LinkedHashMap<>();
+                    frame.put("label", label);
+                    frame.put("category", result.getString(4));
+                    frame.put("line", result.getInt(5));
+                    byId.put(result.getString(1), frame);
+                }
+            }
+            for (int i = 0; i < limit; i++) {
+                Map<String, Object> frame = byId.get(ids.get(i));
+                if (frame != null) {
+                    out.add(frame);
+                }
+            }
+        }
+        Map<String, Object> response = identity(id);
+        response.put("stack_id", stackId);
+        response.put("frames", out);
+        response.put("depth_total", depthTotal);
+        return response;
+    }
+
+    public Map<String, Object> compare(Identity id, V2Window.Range range, V2Window.Range baseline, String metrics, boolean compact)
+            throws SQLException {
+        Map<String, Object> response = identity(id);
+        Map<String, Object> values = new LinkedHashMap<>();
+        for (MetricRef ref : metrics(metrics)) {
+            double current = mean(id, range, ref);
+            double base = mean(id, baseline, ref);
+            if (Double.isNaN(current) && Double.isNaN(base)) {
+                Map<String, Object> missing = new LinkedHashMap<>();
+                missing.put("status", "no_data_in_window");
+                values.put(ref.name(), missing);
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("status", "ok");
+            row.put("unit", ref.unit());
+            row.put("value", number(current, ref.unit(), compact));
+            row.put("baseline", number(base, ref.unit(), compact));
+            if (!Double.isNaN(current) && !Double.isNaN(base) && base != 0.0) {
+                row.put("delta_pct", CompactNumbers.round((current - base) / Math.abs(base) * 100.0, compact));
+            }
+            values.put(ref.name(), row);
+        }
+        response.put("metrics", values);
+        return response;
+    }
+
+    public Map<String, Object> overview(Identity id, V2Window.Range range, boolean compact) throws SQLException {
+        Map<String, Object> blocks = new LinkedHashMap<>();
+        blocks.put("cpu", block(headline(id, range, "cpu.jvm_user", "last", compact)));
+        blocks.put("container", block(headline(id, range, "container.memory_usage", "last", compact)));
+        blocks.put("gc", block(headline(id, range, "gc.pause_ms", "p99", compact)));
+        blocks.put("heap", Map.of("status", "no_data_in_window"));
+        blocks.put("alloc", block(headline(id, range, "alloc.bytes", "sum", compact)));
+        blocks.put("jit", block(headline(id, range, "compile.ms", "sum", compact)));
+        blocks.put("safepoint", block(headline(id, range, "safepoint.ms", "p99", compact)));
+        blocks.put("native_memory", Map.of("status", "no_data_in_window"));
+        blocks.put("locks", block(headline(id, range, "lock.enter_ms", "p99", compact)));
+        blocks.put("threads", block(headline(id, range, "threads.live", "last", compact)));
+        blocks.put("io", block(headline(id, range, "io.socket_read_ms", "p99", compact)));
+        blocks.put("network", Map.of("status", "no_data_in_window"));
+        blocks.put("exceptions", block(headline(id, range, "exceptions.throwables", "sum", compact)));
+        blocks.put("class_loading", block(headline(id, range, "classes.loaded", "sum", compact)));
+        Map<String, Object> response = identity(id);
+        response.put("blocks", blocks);
+        return response;
+    }
+
+    private Map<String, Object> block(Map<String, Object> metrics) {
+        Map<String, Object> block = new LinkedHashMap<>();
+        if (metrics.isEmpty()) {
+            block.put("status", "no_data_in_window");
+            return block;
+        }
+        block.put("status", "ok");
+        block.put("headline_metrics", metrics);
+        return block;
+    }
+
+    private Map<String, Object> headline(Identity id, V2Window.Range range, String metric, String column, boolean compact)
+            throws SQLException {
+        MetricRef ref = metric(metric, column);
+        TreeMap<Long, Double> values = rollup(id, V2Window.Step.M1, ref, range.fromNs(), range.toNs());
+        if (values.isEmpty()) {
+            return Map.of();
+        }
+        double value = "sum".equals(column) ? values.values().stream().mapToDouble(Double::doubleValue).sum() : values.lastEntry().getValue();
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put(metric + "." + column, number(value, ref.unit(), compact));
+        return metrics;
+    }
+
+    private TreeMap<Long, Double> rollup(Identity id, V2Window.Step step, MetricRef ref, long fromNs, long toNs) throws SQLException {
+        TreeMap<Long, Double> values = new TreeMap<>();
+        String glob = glob(step.table(), id);
+        if (glob == null) {
+            return values;
+        }
+        String bucketExpr = "CAST(bucket_t AS BIGINT)";
+        String bucket = step == V2Window.Step.M5 || step == V2Window.Step.H1
+                ? "(" + bucketExpr + " // " + step.nanos + ") * " + step.nanos
+                : bucketExpr;
+        String agg = switch (ref.column()) {
+            case "sum" -> "sum(sum)";
+            case "n" -> "sum(n)";
+            case "min" -> "min(min)";
+            case "last" -> "arg_max(last, " + bucketExpr + ")";
+            case "p50", "p90", "p99", "max" -> "max(" + ref.column() + ")";
+            default -> "max(" + ref.column() + ")";
+        };
+        String sql = "SELECT " + bucket + ", " + agg + " FROM read_parquet('" + glob + "', hive_partitioning=false) "
+                + "WHERE metric = '" + escape(ref.id()) + "' AND " + bucketExpr + " >= " + fromNs + " AND " + bucketExpr + " < " + toNs
+                + " GROUP BY 1";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                values.put(result.getLong(1), result.getDouble(2));
+            }
+        }
+        return values;
+    }
+
+    private double mean(Identity id, V2Window.Range range, MetricRef ref) throws SQLException {
+        Map<Long, Double> values = rollup(id, V2Window.Step.M1, ref, range.fromNs(), range.toNs());
+        if (values.isEmpty()) {
+            return Double.NaN;
+        }
+        return values.values().stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
+    }
+
+    private List<TopRow> ranks(Identity id, V2Window.Range range, String kind, String group) throws SQLException {
+        String glob = glob("top_1m", id);
+        if (glob == null) {
+            return List.of();
+        }
+        boolean byStack = "stack".equals(group);
+        String key = byStack ? "stack_id" : "\"key\"";
+        String sql = "SELECT " + key + ", arg_max(stack_id, weight), sum(weight), sum(n) FROM read_parquet('" + glob
+                + "', hive_partitioning=false) WHERE kind = '" + escape(kind) + "' AND grp = '" + escape(byStack ? "method" : group)
+                + "' AND t >= " + range.fromNs() + " AND t < " + range.toNs() + " GROUP BY 1";
+        List<TopRow> rows = new ArrayList<>();
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                rows.add(new TopRow(result.getString(1), result.getString(2), result.getDouble(3), result.getLong(4)));
+            }
+        }
+        return rows;
+    }
+
+    private static Map<String, TopRow> index(List<TopRow> rows) {
+        Map<String, TopRow> indexed = new LinkedHashMap<>();
+        for (TopRow row : rows) {
+            indexed.put(row.key(), row);
+        }
+        return indexed;
+    }
+
+    private static double baselineWeight(Map<String, TopRow> rows) {
+        return rows.values().stream().mapToDouble(TopRow::weight).sum();
+    }
+
+    private static double ci(double share, long samples) {
+        if (samples <= 0) {
+            return 0.0;
+        }
+        return 1.96 * Math.sqrt(Math.max(0.0, share * (1.0 - share)) / samples);
+    }
+
+    private static double z(double share, long samples, double before, long beforeN) {
+        double left = samples <= 0 ? 0.0 : share * (1.0 - share) / samples;
+        double right = beforeN <= 0 ? 0.0 : before * (1.0 - before) / beforeN;
+        double denom = Math.sqrt(left + right);
+        if (denom == 0.0) {
+            return 0.0;
+        }
+        return (share - before) / denom;
+    }
+
+    private Map<String, Object> tree(List<InstanceRow> rows, long nowNs) {
+        Map<String, Map<String, Map<String, List<InstanceRow>>>> namespaces = new TreeMap<>();
+        for (InstanceRow row : rows) {
+            namespaces.computeIfAbsent(row.namespace(), ignored -> new TreeMap<>())
+                    .computeIfAbsent(row.pod(), ignored -> new TreeMap<>())
+                    .computeIfAbsent(row.container(), ignored -> new ArrayList<>())
+                    .add(row);
+        }
+        List<Map<String, Object>> namespaceList = new ArrayList<>();
+        for (var namespace : namespaces.entrySet()) {
+            List<Map<String, Object>> pods = new ArrayList<>();
+            for (var pod : namespace.getValue().entrySet()) {
+                List<Map<String, Object>> containers = new ArrayList<>();
+                String uid = null;
+                for (var container : pod.getValue().entrySet()) {
+                    List<InstanceRow> instances = container.getValue();
+                    instances.sort(Comparator.comparingLong(InstanceRow::jvmStart).reversed());
+                    if (uid == null) {
+                        uid = instances.get(0).podUid();
+                    }
+                    List<Map<String, Object>> rendered = new ArrayList<>();
+                    for (InstanceRow instance : instances) {
+                        Map<String, Object> item = new LinkedHashMap<>();
+                        item.put("jvm_instance_id", instance.id());
+                        item.put("seq", instance.seq());
+                        if (instance.jvmStart() > 0) {
+                            item.put("jvmStart", Instant.ofEpochMilli(instance.jvmStart()).toString());
+                        }
+                        if (instance.pid() > 0) {
+                            item.put("pid", instance.pid());
+                        }
+                        put(item, "jdk", instance.jdk());
+                        put(item, "restart_reason_hint", instance.hint());
+                        item.put("from", Instant.ofEpochMilli(instance.fromNs() / 1_000_000L).toString());
+                        item.put("to", Instant.ofEpochMilli(instance.toNs() / 1_000_000L).toString());
+                        boolean live = nowNs - instance.toNs() <= LIVE_NS;
+                        item.put("live", live);
+                        item.put("retention_state", live ? "live" : "ended");
+                        rendered.add(item);
+                    }
+                    containers.add(Map.of("name", container.getKey(), "instances", rendered));
+                }
+                Map<String, Object> podBody = new LinkedHashMap<>();
+                podBody.put("name", pod.getKey());
+                put(podBody, "uid", uid);
+                podBody.put("containers", containers);
+                pods.add(podBody);
+            }
+            namespaceList.add(Map.of("name", namespace.getKey(), "pods", pods));
+        }
+        return Map.of("namespaces", namespaceList);
+    }
+
+    private static List<Map<String, Object>> cluster(List<Map<String, Object>> rows) {
+        Map<Long, Map<String, Object>> buckets = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            long t = ((Number) row.get("t")).longValue();
+            long bucket = Math.floorDiv(t, 60_000_000_000L) * 60_000_000_000L;
+            Map<String, Object> current = buckets.computeIfAbsent(bucket, ignored -> {
+                Map<String, Object> created = new LinkedHashMap<>();
+                created.put("t", bucket);
+                created.put("count", 0);
+                created.put("max", 0.0);
+                created.put("kind", row.get("kind"));
+                return created;
+            });
+            current.put("count", ((Integer) current.get("count")) + 1);
+            Object magnitude = row.get("magnitude");
+            if (magnitude instanceof Number number) {
+                current.put("max", Math.max((Double) current.get("max"), number.doubleValue()));
+            }
+        }
+        return new ArrayList<>(buckets.values());
+    }
+
+    private static String eventTable(String type) {
+        return switch (type) {
+            case "gc" -> "gc";
+            case "gc_phase" -> "gc_phase";
+            case "io", "lock", "safepoint", "vm_op", "compile", "deopt", "exception" -> "duration_event";
+            default -> null;
+        };
+    }
+
+    private static String eventFilter(String type) {
+        return switch (type) {
+            case "io" -> " AND type IN ('jdk.FileRead', 'jdk.FileWrite', 'jdk.FileForce', 'jdk.SocketRead', 'jdk.SocketWrite')";
+            case "lock" -> " AND type IN ('jdk.JavaMonitorEnter', 'jdk.JavaMonitorWait', 'jdk.ThreadPark', 'profiler.NativeLock')";
+            case "safepoint" -> " AND type = 'jdk.SafepointBegin'";
+            case "vm_op" -> " AND type = 'jdk.ExecuteVMOperation'";
+            case "compile" -> " AND type = 'jdk.Compilation'";
+            case "deopt" -> " AND type = 'jdk.Deoptimization'";
+            case "exception" -> " AND type IN ('jdk.JavaExceptionThrow', 'jdk.JavaErrorThrow')";
+            case "gc_phase" -> " AND level = 0";
+            default -> "";
+        };
+    }
+
+    private static String eventLabel(String type) {
+        return "gc".equals(type) || "gc_phase".equals(type) ? "name" : "type";
+    }
+
+    private static String eventTarget(String type) {
+        if ("gc".equals(type) || "gc_phase".equals(type)) {
+            return "NULL";
+        }
+        return "target";
+    }
+
+    private static int severity(String value) {
+        return switch (value == null ? "" : value) {
+            case "critical" -> 2;
+            case "warn" -> 1;
+            default -> 0;
+        };
+    }
+
+    private static List<MetricRef> metrics(String text) {
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("metrics is required");
+        }
+        List<MetricRef> refs = new ArrayList<>();
+        for (String part : text.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            String id = trimmed;
+            String column = null;
+            int dot = trimmed.lastIndexOf('.');
+            if (dot > 0) {
+                String suffix = trimmed.substring(dot + 1);
+                if (List.of("p50", "p90", "p99", "sum", "min", "max", "last", "n").contains(suffix)) {
+                    id = trimmed.substring(0, dot);
+                    column = suffix;
+                }
+            }
+            MetricRegistry.Metric metric = MetricRegistry.get(id);
+            if (metric == null) {
+                throw new IllegalArgumentException("unknown metric " + id);
+            }
+            if (column == null) {
+                column = switch (metric.kind()) {
+                    case "duration" -> "p99";
+                    case "counter", "sample-share" -> "sum";
+                    default -> "last";
+                };
+            }
+            refs.add(new MetricRef(trimmed, id, column, metric.unit(), metric.nativePeriod()));
+        }
+        if (refs.isEmpty()) {
+            throw new IllegalArgumentException("metrics is required");
+        }
+        if (refs.size() > 4) {
+            throw new IllegalArgumentException("at most 4 metrics");
+        }
+        return refs;
+    }
+
+    private static MetricRef metric(String id, String column) {
+        MetricRegistry.Metric metric = MetricRegistry.get(id);
+        return new MetricRef(id + "." + column, id, column, metric.unit(), metric.nativePeriod());
+    }
+
+    private static String coarsestNative(List<MetricRef> refs) {
+        String period = "1s";
+        for (MetricRef ref : refs) {
+            if ("1m".equals(ref.nativePeriod()) || "5m".equals(ref.nativePeriod()) || "1h".equals(ref.nativePeriod())) {
+                period = ref.nativePeriod();
+            }
+        }
+        return period;
+    }
+
+    private String glob(String table, Identity id) {
+        return files(table, partition(id.ns(), id.pod(), id.container(), id.instance()));
+    }
+
+    private String files(String table, String suffix) {
+        try {
+            Path dir = suffix == null || suffix.isEmpty() ? root.resolve(table) : root.resolve(table).resolve(suffix);
+            if (!Files.isDirectory(dir)) {
+                return null;
+            }
+            try (var walk = Files.walk(dir)) {
+                if (walk.noneMatch(path -> path.getFileName().toString().endsWith(".parquet"))) {
+                    return null;
+                }
+            }
+            return dir.toAbsolutePath().toString().replace("'", "''") + "/**/*.parquet";
+        } catch (java.io.IOException error) {
+            return null;
+        }
+    }
+
+    private static String partition(String ns, String pod, String container, String instance) {
+        String path = "namespace=" + ParquetTables.sanitize(ns) + "/pod=" + ParquetTables.sanitize(pod) + "/container="
+                + ParquetTables.sanitize(container);
+        if (instance != null) {
+            path += "/jvm_instance_id=" + ParquetTables.sanitize(instance);
+        }
+        return path;
+    }
+
+    private static Map<String, Object> identity(Identity id) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("identity", Map.of(
+                "ns", id.ns(), "pod", id.pod(), "container", id.container(), "jvm_instance_id", id.instance()));
+        return response;
+    }
+
+    private static void put(Map<String, Object> map, String key, Object value) {
+        if (value != null && !(value instanceof String text && text.isBlank())) {
+            map.put(key, value);
+        }
+    }
+
+    private static Object number(double value, String unit, boolean compact) {
+        if (!Double.isFinite(value)) {
+            return null;
+        }
+        if ("bytes".equals(unit)) {
+            return Math.round(value);
+        }
+        return CompactNumbers.round(value, compact);
+    }
+
+    private static String escape(String value) {
+        return value == null ? "" : value.replace("'", "''");
+    }
+
+    public record Identity(String ns, String pod, String container, String instance) {}
+
+    private record MetricRef(String name, String id, String column, String unit, String nativePeriod) {}
+
+    private record TopRow(String key, String stackId, double weight, long n) {}
+
+    private record InstanceRow(
+            String namespace, String pod, String container, String id, String podUid, int seq, long jvmStart, long pid, String jdk,
+            String hint, long fromNs, long toNs) {}
+}

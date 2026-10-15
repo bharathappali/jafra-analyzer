@@ -144,7 +144,7 @@ public class RecordingWindowSelection {
                 Response.status(404).type(MediaType.APPLICATION_JSON).entity(body).build());
     }
 
-    static WebApplicationException badRequest(String error) {
+    public static WebApplicationException badRequest(String error) {
         return new WebApplicationException(
                 Response.status(400)
                         .type(MediaType.APPLICATION_JSON)

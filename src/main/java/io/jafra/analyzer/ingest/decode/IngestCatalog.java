@@ -247,7 +247,7 @@ public final class IngestCatalog implements AutoCloseable {
         }
     }
 
-    static void ensureDriver() throws SQLException {
+    public static void ensureDriver() throws SQLException {
         try {
             Class.forName("org.duckdb.DuckDBDriver");
         } catch (ClassNotFoundException error) {

@@ -1,0 +1,24 @@
+# /v2 read API
+
+Every endpoint except `GET /v2/workloads` requires `ns`, `pod`, `container`, and `instance`. `instance=latest` resolves to the newest JVM start and the response echoes that id. A missing `instance` is 400.
+
+The time window is `last` (default `15m`, wall clock ending now, max `7d`) or a closed `from`/`to` pair. `from` and `to` are ISO-8601 or epoch milliseconds. `before` and `after` are rejected; they stay on `/api/v1`. `compare_from` and `compare_to` are a second closed range on `/v2/top` and `/v2/compare`. `step` is `auto`, `1s`, `10s`, `1m`, `5m`, or `1h`. It is not a window.
+
+`auto` picks the smallest step with at most 240 points: 1s up to 4 minutes, 10s up to 40 minutes, 1m up to 4 hours, 5m up to 20 hours, and 1h after that. 5m and 1h are grouped from the 1m rollup. Percentile series at those steps use the max 1m percentile in the bucket. A requested step finer than the metric's native period, or finer than the 240-point cap, returns `status: coarser_than_requested` and the step that was used. Missing buckets stay null. They are not interpolated.
+
+`format=compact` (the default) rounds to 3 significant figures, sends stack ids without frame text, and omits null object fields. Nulls stay in series arrays. Bytes are integers. `format=full` keeps the raw doubles.
+
+Heap, findings, signals, and retention tombstones are not in this cut. Those blocks return `no_data_in_window`.
+
+| Endpoint | Reads |
+|----------|--------|
+| `GET /v2/workloads` | `jvm_instance` |
+| `GET /v2/series?metrics=` | `rollup_1s`, `rollup_10s`, `rollup_1m` |
+| `GET /v2/top?kind=&group=&n=` | `top_1m` |
+| `GET /v2/events?type=&cursor=&limit=` | `gc`, `gc_phase`, `duration_event` |
+| `GET /v2/markers?kinds=&min_severity=` | `marker` |
+| `GET /v2/stacks/{id}?depth=` | `stack`, `frame` |
+| `GET /v2/compare?metrics=&compare_from=&compare_to=` | 1m rollups |
+| `GET /v2/overview` | 1m rollups |
+
+`/v2/top` returns `insufficient_samples` when the window has fewer than 300 samples. `ci95` is the normal 95% half-width of the share. More than 500 markers are clustered per minute (`count`, `max`) instead of listed. Event cursors are exclusive timestamps. `group=thread_group` and `kind=native` return `no_data_in_window` until those rankings are stored.
