@@ -15,7 +15,7 @@ import jakarta.ws.rs.core.MediaType;
 
 import io.jafra.analyzer.api.RecordingWindowSelection;
 
-/** Read API over the ingest Parquet tables. Heap, findings, and signals are later cuts. */
+/** Read API over the ingest Parquet tables. Heap generations are a later cut. */
 @Path("/v2")
 @Produces(MediaType.APPLICATION_JSON)
 public class V2Resource {
@@ -30,6 +30,16 @@ public class V2Resource {
     @Path("workloads")
     public Map<String, Object> workloads(@QueryParam("include_tombstoned") @DefaultValue("false") boolean includeTombstoned) {
         return call(() -> reads.workloads(Instant.now(), includeTombstoned));
+    }
+
+    @GET
+    @Path("instance")
+    public Map<String, Object> instance(
+            @QueryParam("ns") String ns,
+            @QueryParam("pod") String pod,
+            @QueryParam("container") String container,
+            @QueryParam("instance") String instance) {
+        return call(() -> reads.instance(identity(ns, pod, container, instance)));
     }
 
     @GET

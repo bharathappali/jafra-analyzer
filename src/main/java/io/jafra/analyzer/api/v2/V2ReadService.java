@@ -16,8 +16,9 @@ import java.util.TreeMap;
 
 import io.jafra.analyzer.ingest.decode.ParquetTables;
 import io.jafra.analyzer.metrics.MetricRegistry;
+import io.jafra.analyzer.signals.SignalRegistry;
 
-/** Reads the v2 Parquet tables. Heap, findings, and signals stay unavailable until later cuts. */
+/** Reads the v2 Parquet tables. Heap generations stay empty until the heap feed. */
 public final class V2ReadService {
     private static final long LIVE_NS = 120_000_000_000L;
     private static final List<String> OVERVIEW = List.of(
@@ -39,7 +40,7 @@ public final class V2ReadService {
             String sql = "SELECT namespace, pod, container, jvm_instance_id, "
                     + "arg_max(pod_uid, t), arg_max(instance_seq, t), arg_max(jvm_start, t), arg_max(pid, t), "
                     + "arg_max(jdk_version, t), arg_max(restart_reason_hint, t), min(t), max(t) "
-                    + "FROM read_parquet('" + glob + "', hive_partitioning=false) GROUP BY 1, 2, 3, 4";
+                    + "FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true) GROUP BY 1, 2, 3, 4";
             try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
                 while (result.next()) {
                     rows.add(new InstanceRow(
@@ -57,11 +58,59 @@ public final class V2ReadService {
         if (glob == null) {
             return null;
         }
-        String sql = "SELECT jvm_instance_id FROM read_parquet('" + glob + "', hive_partitioning=false) "
+        String sql = "SELECT jvm_instance_id FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true) "
                 + "ORDER BY jvm_start DESC, t DESC LIMIT 1";
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
             return result.next() ? result.getString(1) : null;
         }
+    }
+
+    public Map<String, Object> instance(Identity id) throws SQLException {
+        Map<String, Object> response = identity(id);
+        String instances = glob("jvm_instance", id);
+        if (instances != null) {
+            String sql = "SELECT "
+                    + arg("jdk_version") + ", " + arg("jdk_feature") + ", " + arg("pid") + ", " + arg("jvm_start") + ", "
+                    + arg("gc_young") + ", " + arg("gc_old") + ", " + arg("gc_selected_by") + ", " + arg("effective_cpus") + ", "
+                    + arg("cpu_limit_cores") + ", " + arg("cpu_request_millicores_approx") + ", " + arg("cpu_request_quality") + ", "
+                    + arg("cpu_qos") + ", " + arg("mem_limit") + ", " + arg("container_type")
+                    + " FROM read_parquet('" + instances + "', hive_partitioning=false, union_by_name=true)";
+            try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+                if (result.next()) {
+                    Map<String, Object> jvm = new LinkedHashMap<>();
+                    put(jvm, "jdk", result.getString(1));
+                    put(jvm, "jdk_feature", result.getObject(2));
+                    put(jvm, "pid", result.getObject(3));
+                    put(jvm, "jvm_start", result.getObject(4));
+                    put(jvm, "gc_young", result.getString(5));
+                    put(jvm, "gc_old", result.getString(6));
+                    put(jvm, "gc_selected_by", result.getString(7));
+                    put(jvm, "effective_cpus", result.getObject(8));
+                    put(jvm, "cpu_limit_cores", result.getObject(9));
+                    put(jvm, "cpu_request_millicores_approx", result.getObject(10));
+                    put(jvm, "cpu_request_quality", result.getString(11));
+                    put(jvm, "cpu_qos", result.getString(12));
+                    put(jvm, "mem_limit", result.getObject(13));
+                    put(jvm, "container_type", result.getString(14));
+                    response.put("jvm", jvm);
+                }
+            }
+        }
+        List<Map<String, Object>> signals = new ArrayList<>();
+        for (ReadSignal signal : signalState(id).values()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", signal.id());
+            row.put("status", signal.status());
+            put(row, "reason", signal.reason());
+            if (signal.minJdk() != null) {
+                row.put("min_jdk", signal.minJdk());
+            }
+            put(row, "hint", signal.hint());
+            signals.add(row);
+        }
+        response.put("signals", signals);
+        response.put("findings", findings(id));
+        return response;
     }
 
     public Map<String, Object> series(Identity id, V2Window.Range range, String requestedStep, String metrics, boolean compact)
@@ -78,6 +127,7 @@ public final class V2ReadService {
             offsets.add((bucket - start) / 1_000_000_000L);
         }
         Map<String, Object> series = new LinkedHashMap<>();
+        Map<String, ReadSignal> signals = signalState(id);
         boolean any = false;
         for (MetricRef ref : refs) {
             Map<Long, Double> values = rollup(id, choice.step(), ref, start, end);
@@ -95,9 +145,19 @@ public final class V2ReadService {
             }
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("unit", ref.unit());
-            body.put("status", seen ? "ok" : "no_data_in_window");
-            if (seen) {
-                body.put("v", points);
+            ReadSignal signal = signals.get(SignalRegistry.get().metricSignal(ref.id()));
+            if (!seen && signal != null && "unavailable".equals(signal.status())) {
+                body.put("status", "unavailable");
+                put(body, "reason", signal.reason());
+                if (signal.minJdk() != null) {
+                    body.put("min_jdk", signal.minJdk());
+                }
+                put(body, "hint", signal.hint());
+            } else {
+                body.put("status", seen ? "ok" : "no_data_in_window");
+                if (seen) {
+                    body.put("v", points);
+                }
             }
             series.put(ref.name(), body);
         }
@@ -185,7 +245,7 @@ public final class V2ReadService {
         String extra = eventFilter(type);
         String min = minMs == null ? "" : " AND " + durColumn + " >= " + minMs;
         String sql = "SELECT t, " + eventLabel(type) + ", " + durColumn + ", " + eventTarget(type)
-                + " FROM read_parquet('" + glob + "', hive_partitioning=false) WHERE t >= " + range.fromNs()
+                + " FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs()
                 + " AND t < " + range.toNs() + " AND t > " + after + extra + min + " ORDER BY t LIMIT " + (cap + 1);
         List<Map<String, Object>> rows = new ArrayList<>();
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
@@ -219,7 +279,7 @@ public final class V2ReadService {
         }
         int floor = severity(minSeverity == null ? "info" : minSeverity);
         String sql = "SELECT t, t_end, kind, severity, magnitude, unit, ref FROM read_parquet('" + glob
-                + "', hive_partitioning=false) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs() + " ORDER BY t";
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs() + " ORDER BY t";
         List<Map<String, Object>> rows = new ArrayList<>();
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
             while (result.next()) {
@@ -261,7 +321,7 @@ public final class V2ReadService {
         if (stacks == null || frames == null) {
             return null;
         }
-        String sql = "SELECT frames, depth FROM read_parquet('" + stacks + "', hive_partitioning=false) WHERE stack_id = '"
+        String sql = "SELECT frames, depth FROM read_parquet('" + stacks + "', hive_partitioning=false, union_by_name=true) WHERE stack_id = '"
                 + escape(stackId) + "' LIMIT 1";
         String joined;
         int depthTotal;
@@ -279,7 +339,7 @@ public final class V2ReadService {
             String in = ids.subList(0, limit).stream().map(value -> "'" + escape(value) + "'").reduce((a, b) -> a + "," + b).orElse("''");
             Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
             String frameSql = "SELECT frame_id, \"class\", method, category, line FROM read_parquet('" + frames
-                    + "', hive_partitioning=false) WHERE frame_id IN (" + in + ")";
+                    + "', hive_partitioning=false, union_by_name=true) WHERE frame_id IN (" + in + ")";
             try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(frameSql)) {
                 while (result.next()) {
                     String className = result.getString(2);
@@ -334,34 +394,51 @@ public final class V2ReadService {
     }
 
     public Map<String, Object> overview(Identity id, V2Window.Range range, boolean compact) throws SQLException {
+        Map<String, ReadSignal> signals = signalState(id);
+        List<String> codes = findings(id);
         Map<String, Object> blocks = new LinkedHashMap<>();
-        blocks.put("cpu", block(headline(id, range, "cpu.jvm_user", "last", compact)));
-        blocks.put("container", block(headline(id, range, "container.memory_usage", "last", compact)));
-        blocks.put("gc", block(headline(id, range, "gc.pause_ms", "p99", compact)));
-        blocks.put("heap", Map.of("status", "no_data_in_window"));
-        blocks.put("alloc", block(headline(id, range, "alloc.bytes", "sum", compact)));
-        blocks.put("jit", block(headline(id, range, "compile.ms", "sum", compact)));
-        blocks.put("safepoint", block(headline(id, range, "safepoint.ms", "p99", compact)));
-        blocks.put("native_memory", Map.of("status", "no_data_in_window"));
-        blocks.put("locks", block(headline(id, range, "lock.enter_ms", "p99", compact)));
-        blocks.put("threads", block(headline(id, range, "threads.live", "last", compact)));
-        blocks.put("io", block(headline(id, range, "io.socket_read_ms", "p99", compact)));
+        blocks.put("cpu", block(headline(id, range, "cpu.jvm_user", "last", compact), null, List.of()));
+        blocks.put("container", block(headline(id, range, "container.memory_usage", "last", compact), signals.get("container"), List.of()));
+        blocks.put("gc", block(headline(id, range, "gc.pause_ms", "p99", compact), null, codes));
+        blocks.put("heap", block(Map.of(), signals.get("heap.pools"), List.of()));
+        blocks.put("alloc", block(headline(id, range, "alloc.bytes", "sum", compact), null, List.of()));
+        blocks.put("jit", block(headline(id, range, "compile.ms", "sum", compact), null, List.of()));
+        blocks.put("safepoint", block(headline(id, range, "safepoint.ms", "p99", compact), null, List.of()));
+        blocks.put("native_memory", block(Map.of(), signals.get("nmt"), List.of()));
+        blocks.put("locks", block(headline(id, range, "lock.enter_ms", "p99", compact), null, List.of()));
+        blocks.put("threads", block(headline(id, range, "threads.live", "last", compact), null, List.of()));
+        blocks.put("io", block(headline(id, range, "io.socket_read_ms", "p99", compact), signals.get("io.socket_read"), List.of()));
         blocks.put("network", Map.of("status", "no_data_in_window"));
-        blocks.put("exceptions", block(headline(id, range, "exceptions.throwables", "sum", compact)));
-        blocks.put("class_loading", block(headline(id, range, "classes.loaded", "sum", compact)));
+        blocks.put("exceptions", block(headline(id, range, "exceptions.throwables", "sum", compact), null, List.of()));
+        blocks.put("class_loading", block(headline(id, range, "classes.loaded", "sum", compact), null, List.of()));
         Map<String, Object> response = identity(id);
         response.put("blocks", blocks);
         return response;
     }
 
-    private Map<String, Object> block(Map<String, Object> metrics) {
+    private Map<String, Object> block(Map<String, Object> metrics, ReadSignal signal, List<String> findings) {
         Map<String, Object> block = new LinkedHashMap<>();
         if (metrics.isEmpty()) {
+            if (signal != null && "unavailable".equals(signal.status())) {
+                block.put("status", "unavailable");
+                put(block, "reason", signal.reason());
+                if (signal.minJdk() != null) {
+                    block.put("min_jdk", signal.minJdk());
+                }
+                put(block, "hint", signal.hint());
+                return block;
+            }
             block.put("status", "no_data_in_window");
+            if (findings.contains("ERGONOMIC_SERIAL_GC")) {
+                block.put("flags", List.of("ERGONOMIC_SERIAL_GC"));
+            }
             return block;
         }
         block.put("status", "ok");
         block.put("headline_metrics", metrics);
+        if (findings.contains("ERGONOMIC_SERIAL_GC")) {
+            block.put("flags", List.of("ERGONOMIC_SERIAL_GC"));
+        }
         return block;
     }
 
@@ -396,7 +473,7 @@ public final class V2ReadService {
             case "p50", "p90", "p99", "max" -> "max(" + ref.column() + ")";
             default -> "max(" + ref.column() + ")";
         };
-        String sql = "SELECT " + bucket + ", " + agg + " FROM read_parquet('" + glob + "', hive_partitioning=false) "
+        String sql = "SELECT " + bucket + ", " + agg + " FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true) "
                 + "WHERE metric = '" + escape(ref.id()) + "' AND " + bucketExpr + " >= " + fromNs + " AND " + bucketExpr + " < " + toNs
                 + " GROUP BY 1";
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
@@ -423,7 +500,7 @@ public final class V2ReadService {
         boolean byStack = "stack".equals(group);
         String key = byStack ? "stack_id" : "\"key\"";
         String sql = "SELECT " + key + ", arg_max(stack_id, weight), sum(weight), sum(n) FROM read_parquet('" + glob
-                + "', hive_partitioning=false) WHERE kind = '" + escape(kind) + "' AND grp = '" + escape(byStack ? "method" : group)
+                + "', hive_partitioning=false, union_by_name=true) WHERE kind = '" + escape(kind) + "' AND grp = '" + escape(byStack ? "method" : group)
                 + "' AND t >= " + range.fromNs() + " AND t < " + range.toNs() + " GROUP BY 1";
         List<TopRow> rows = new ArrayList<>();
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
@@ -694,9 +771,50 @@ public final class V2ReadService {
         return value == null ? "" : value.replace("'", "''");
     }
 
+    private static String arg(String column) {
+        return "arg_max(\"" + column + "\", t) FILTER (WHERE \"" + column + "\" IS NOT NULL)";
+    }
+
+    private Map<String, ReadSignal> signalState(Identity id) throws SQLException {
+        Map<String, ReadSignal> signals = new LinkedHashMap<>();
+        String glob = glob("signal", id);
+        if (glob == null) {
+            return signals;
+        }
+        String sql = "SELECT signal_id, status, reason, min_jdk, hint FROM ("
+                + "SELECT signal_id, status, reason, min_jdk, hint, row_number() OVER (PARTITION BY signal_id ORDER BY t DESC) AS rn "
+                + "FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true)"
+                + ") WHERE rn = 1";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                Integer minJdk = result.getObject(4) == null ? null : result.getInt(4);
+                signals.put(result.getString(1), new ReadSignal(result.getString(1), result.getString(2), result.getString(3), minJdk,
+                        result.getString(5)));
+            }
+        }
+        return signals;
+    }
+
+    private List<String> findings(Identity id) throws SQLException {
+        String glob = glob("finding", id);
+        if (glob == null) {
+            return List.of();
+        }
+        List<String> codes = new ArrayList<>();
+        String sql = "SELECT DISTINCT code FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true)";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                codes.add(result.getString(1));
+            }
+        }
+        return codes;
+    }
+
     public record Identity(String ns, String pod, String container, String instance) {}
 
     private record MetricRef(String name, String id, String column, String unit, String nativePeriod) {}
+
+    private record ReadSignal(String id, String status, String reason, Integer minJdk, String hint) {}
 
     private record TopRow(String key, String stackId, double weight, long n) {}
 

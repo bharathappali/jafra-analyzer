@@ -34,6 +34,12 @@ A file older than `jafra.compact.min-age` (default 1 hour, by modification time)
 
 Decode runs on a pool of `jafra.decode.threads` (default 4). Catalog writes are serialized on the DuckDB file.
 
+## Signals and container facts
+
+Each chunk also writes `signal` (one row per id in `signals.yaml`) and, when it applies, a `finding` row `ERGONOMIC_SERIAL_GC`. Container limits come from `jdk.ContainerConfiguration`: `cpu_limit_cores` is quota divided by the slice period (null when the quota is unlimited), `cpu_request_millicores_approx` rounds `cpuShares * 1000 / 1024` to the nearest 10, and cgroup v2 marks that request `approx_v2_weight_mapping`. Shares of 2 are `best_effort`. A negative memory limit is stored as null. `memory_request` is always `not_exposed_by_cgroup`.
+
+`gc_selected_by` is `command_line` when an enabled `Use*GC` flag has origin command line, and `ergonomic` when flag events were seen and none of those flags did. `ERGONOMIC_SERIAL_GC` is recorded when that selection is ergonomic, Serial is in use, and either `effective_cpus` is below 2 or `mem_limit` is below 1792 MiB.
+
 ## Rollups
 
 After each chunk, the minutes it touches are recomputed into `rollup_1s`, `rollup_10s`, and `rollup_1m`. One file per bucket is named `bucket-<epoch-ns>.parquet` and replaced when a later chunk touches that bucket. Columns are `metric`, `bucket_t`, `n`, `sum`, `min`, `max`, `p50`, `p90`, `p99`, and `last`. Percentiles are DuckDB `quantile_disc` on the raw rows in that bucket. The 1 minute duration percentiles are not merged from the 1 second files.

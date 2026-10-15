@@ -17,6 +17,7 @@ import io.jafra.analyzer.recordings.analytics.AnalyticsModels;
 import io.jafra.analyzer.recordings.analytics.CorrelationsEngine;
 import io.jafra.analyzer.recordings.analytics.SubsystemBuilder;
 import io.jafra.analyzer.recordings.analytics.SubsystemRegistry;
+import io.jafra.analyzer.signals.SignalRegistry;
 
 @ApplicationScoped
 public class JfrAnalyticsService {
@@ -64,24 +65,29 @@ public class JfrAnalyticsService {
                 : null;
         List<AnalyticsModels.Marker> markers = new ArrayList<>();
         Map<String, AnalyticsModels.SubsystemResult> subsystems = new LinkedHashMap<>();
-        for (Map.Entry<String, SubsystemBuilder> entry : registry.all().entrySet()) {
-            if (!params.subsystemFilter().isEmpty() && !params.subsystemFilter().contains(entry.getKey())) {
-                continue;
+        SignalRegistry.bind(SignalFactsProbe.from(events, available));
+        try {
+            for (Map.Entry<String, SubsystemBuilder> entry : registry.all().entrySet()) {
+                if (!params.subsystemFilter().isEmpty() && !params.subsystemFilter().contains(entry.getKey())) {
+                    continue;
+                }
+                subsystems.put(entry.getKey(), entry.getValue().build(events, available, grid, params, markers));
             }
-            subsystems.put(entry.getKey(), entry.getValue().build(events, available, grid, params, markers));
+            Map<String, Object> correlationMap = new LinkedHashMap<>(correlations.correlate(subsystems));
+            if (!markers.isEmpty() && timeseriesMode) {
+                correlationMap.put("markers", markers);
+            }
+            String mode = timeseriesMode ? AnalyticsModels.MODE_TIMESERIES : AnalyticsModels.MODE_DAILY;
+            return new AnalyticsModels.AnalyticsDocument(
+                    AnalyticsModels.SCHEMA_VERSION,
+                    mode,
+                    AnalysisEnvelope.from(selection),
+                    AnalyticsCoverage.compute(selection, available, profilerPresent),
+                    subsystems,
+                    correlationMap);
+        } finally {
+            SignalRegistry.clear();
         }
-        Map<String, Object> correlationMap = new LinkedHashMap<>(correlations.correlate(subsystems));
-        if (!markers.isEmpty() && timeseriesMode) {
-            correlationMap.put("markers", markers);
-        }
-        String mode = timeseriesMode ? AnalyticsModels.MODE_TIMESERIES : AnalyticsModels.MODE_DAILY;
-        return new AnalyticsModels.AnalyticsDocument(
-                AnalyticsModels.SCHEMA_VERSION,
-                mode,
-                AnalysisEnvelope.from(selection),
-                AnalyticsCoverage.compute(selection, available, profilerPresent),
-                subsystems,
-                correlationMap);
     }
 
     private static int clampTop(Integer top) {

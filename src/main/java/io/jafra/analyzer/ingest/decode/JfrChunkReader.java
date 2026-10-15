@@ -6,9 +6,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+
+import io.jafra.analyzer.signals.ContainerMath;
 
 import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
@@ -31,6 +35,7 @@ public final class JfrChunkReader {
     private static void accept(ReadChunk chunk, RecordedEvent event) {
         String type = event.getEventType().getName();
         long t = epochNs(event.getStartTime());
+        chunk.seen.add(type);
         switch (type) {
             case "jdk.JVMInformation" -> chunk.jvm = jvm(event);
             case "jdk.ActiveSetting" -> {
@@ -40,6 +45,12 @@ public final class JfrChunkReader {
                         .toLowerCase(Locale.ROOT);
                 if (blob.contains("ctimer") || blob.contains("async")) {
                     chunk.sawProfilerEvent = true;
+                }
+                if ("threshold".equals(row.setting())) {
+                    Double ms = ContainerMath.millis(row.value());
+                    if (row.eventType() != null && ms != null) {
+                        chunk.thresholdsMs.put(row.eventType(), ms);
+                    }
                 }
             }
             case "jdk.CPULoad" -> {
@@ -80,6 +91,10 @@ public final class JfrChunkReader {
                 EventRows.accept(chunk, event, type, t);
             }
             case "jdk.ContainerConfiguration" -> chunk.container = container(event);
+            case "jdk.GCConfiguration" -> chunk.gcConfig = new GcConfig(
+                    text(event, "youngCollector", "young"), text(event, "oldCollector", "old", "gcName"));
+            case "jdk.BooleanFlag", "jdk.StringFlag" -> chunk.flags.add(
+                    new FlagRow(text(event, "name"), text(event, "value"), text(event, "origin")));
             case "jdk.EvacuationFailed", "jdk.PromotionFailed", "jdk.ZAllocationStall", "jdk.CodeCacheFull", "jdk.DataLoss" ->
                     chunk.signals.add(new SignalEvent(t, type));
             default -> EventRows.accept(chunk, event, type, t);
@@ -234,6 +249,10 @@ public final class JfrChunkReader {
     public static final class ReadChunk {
         JvmFacts jvm;
         ContainerFacts container;
+        GcConfig gcConfig;
+        final Set<String> seen = new LinkedHashSet<>();
+        final List<FlagRow> flags = new ArrayList<>();
+        final Map<String, Double> thresholdsMs = new LinkedHashMap<>();
         String shutdownReason;
         boolean oom;
         long oomT;
@@ -261,6 +280,10 @@ public final class JfrChunkReader {
 
     public record ContainerFacts(
             Long cpuQuota, Long cpuSlicePeriod, Long cpuShares, Long memoryLimit, Long effectiveCpus, String containerType) {}
+
+    public record GcConfig(String young, String old) {}
+
+    public record FlagRow(String name, String value, String origin) {}
 
     public record SettingRow(long t, String eventType, String setting, String value) {}
 

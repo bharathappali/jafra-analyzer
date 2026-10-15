@@ -1,0 +1,60 @@
+# Signal capability. A missing series uses the first matching reason.
+- id: rss
+  events: [jdk.ResidentSetSize]
+  min_jdk: 21
+  metrics: [rss]
+- id: nmt
+  events: [jdk.NativeMemoryUsage, jdk.NativeMemoryUsageTotal]
+  min_jdk: 20
+  requires_flags: [NativeMemoryTracking]
+  metrics: [nmt.committed]
+- id: heap.pools
+  events: [jdk.GCHeapMemoryUsage, jdk.GCHeapMemoryPoolUsage]
+  min_jdk: 21
+  metrics: [heap.pools]
+- id: zgc.generational
+  events: [jdk.ZYoungGarbageCollection, jdk.ZOldGarbageCollection]
+  min_jdk: 21
+  gcs: [Z]
+- id: virtual_threads.pinned
+  events: [jdk.VirtualThreadPinned, jdk.ThreadSleep]
+  min_jdk: 19
+- id: compiler.queue
+  events: [jdk.CompilerQueueUtilization]
+  min_jdk: 22
+- id: cputime_sampler
+  events: [jdk.CPUTimeSample]
+  min_jdk: 25
+- id: safepoint.latency
+  events: [jdk.SafepointLatency]
+  min_jdk: 25
+- id: monitor.stats
+  events: [jdk.JavaMonitorStatistics]
+  min_jdk: 25
+- id: gc.cpu_time
+  events: [jdk.GCCPUTime]
+  min_jdk: 20
+- id: finalizers
+  events: [jdk.FinalizerStatistics]
+  min_jdk: 18
+- id: g1.regions
+  events: [jdk.G1HeapRegionTypeChange, jdk.G1HeapRegionInformation]
+  gcs: [G1]
+- id: ps.spaces
+  events: [jdk.PSHeapSummary]
+  gcs: [Parallel]
+- id: container
+  events: [jdk.ContainerConfiguration, jdk.ContainerCPUThrottling, jdk.ContainerCPUUsage, jdk.ContainerMemoryUsage]
+  requires_container: true
+  metric_prefix: container.
+- id: memory.request
+  always_reason: not_exposed_by_cgroup
+- id: alloc.jfr
+  events: [jdk.ObjectAllocationInNewTLAB, jdk.ObjectAllocationOutsideTLAB, jdk.ObjectAllocationSample]
+  replaced_by_profiler: true
+  metrics: [sample.alloc]
+- id: io.socket_read
+  events: [jdk.SocketRead]
+  threshold_event: jdk.SocketRead
+  threshold_ms: 20
+  metrics: [io.socket_read_ms]

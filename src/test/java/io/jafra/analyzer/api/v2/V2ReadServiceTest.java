@@ -52,7 +52,35 @@ class V2ReadServiceTest {
             Map<String, Object> top = service.top(id, fourMinutes, "cpu", "method", 10, null, true);
             assertEquals("insufficient_samples", top.get("status"));
             assertTrue(new ObjectMapper().writeValueAsBytes(top).length <= 2048);
+
+            writeSignal(catalog, root.resolve("v2"));
+            Map<String, Object> rss = service.series(id, threeSeconds, "1s", "rss", true);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rssBody = (Map<String, Object>) ((Map<?, ?>) rss.get("series")).get("rss");
+            assertEquals("unavailable", rssBody.get("status"));
+            assertEquals("jdk_version", rssBody.get("reason"));
+            assertEquals(21, ((Number) rssBody.get("min_jdk")).intValue());
+            assertNull(rssBody.get("v"));
+
+            Map<String, Object> zeros = service.series(id, threeSeconds, "1s", "classes.unloaded", true);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> unloaded = (Map<String, Object>) ((Map<?, ?>) zeros.get("series")).get("classes.unloaded");
+            assertEquals("ok", unloaded.get("status"));
+            assertEquals(0, ((Number) ((List<?>) unloaded.get("v")).get(0)).intValue());
         }
+    }
+
+    private static void writeSignal(IngestCatalog catalog, Path v2) throws Exception {
+        Path file = ParquetTables.partitionFile(v2, "signal", "default", "pod", "app", "abc", T0, "signals");
+        ParquetTables.write(catalog.connection(), file, "signal",
+                List.of("namespace", "pod", "container", "jvm_instance_id", "t", "signal_id", "status", "reason", "min_jdk", "hint"),
+                List.of(List.of("default", "pod", "app", "abc", T0, "rss", "unavailable", "jdk_version", 21,
+                        "Upgrade to JDK 21+ to see this (jdk.ResidentSetSize).")));
+        Path zeros = ParquetTables.partitionFile(v2, "rollup_1s", "default", "pod", "app", "abc", T0, "bucket-zero");
+        ParquetTables.write(catalog.connection(), zeros, "rollup_1s",
+                List.of("namespace", "pod", "container", "jvm_instance_id", "t", "metric", "bucket_t", "n", "sum", "min", "max", "p50",
+                        "p90", "p99", "last"),
+                List.of(List.of("default", "pod", "app", "abc", T0, "classes.unloaded", T0, 1L, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
     }
 
     private static void writeSeries(IngestCatalog catalog, Path v2) throws Exception {

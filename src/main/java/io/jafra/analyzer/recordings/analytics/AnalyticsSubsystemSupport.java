@@ -12,6 +12,7 @@ import io.jafra.analyzer.recordings.JfrAggregationService;
 import io.jafra.analyzer.recordings.JfrAnalyticsSupport;
 import io.jafra.analyzer.recordings.JfrItemAccess;
 import io.jafra.analyzer.recordings.TimeBucketGrid;
+import io.jafra.analyzer.signals.SignalRegistry;
 
 abstract class AnalyticsSubsystemSupport implements SubsystemBuilder {
     protected static Map<String, Object> evidenceFromRanks(
@@ -50,7 +51,7 @@ abstract class AnalyticsSubsystemSupport implements SubsystemBuilder {
     protected static AnalyticsModels.SubsystemResult absent(String id, List<String> expected) {
         return new AnalyticsModels.SubsystemResult(
                 id,
-                new AnalyticsModels.Availability(AnalyticsModels.AVAIL_ABSENT, expected, List.of()),
+                explain(new AnalyticsModels.Availability(AnalyticsModels.AVAIL_ABSENT, expected, List.of())),
                 Map.of(),
                 null,
                 Map.of(),
@@ -101,6 +102,23 @@ abstract class AnalyticsSubsystemSupport implements SubsystemBuilder {
     }
 
     protected static AnalyticsModels.Availability avail(List<String> expected, java.util.Set<String> available) {
-        return JfrAnalyticsSupport.availability(expected, available);
+        return explain(JfrAnalyticsSupport.availability(expected, available));
+    }
+
+    private static AnalyticsModels.Availability explain(AnalyticsModels.Availability availability) {
+        if (!AnalyticsModels.AVAIL_ABSENT.equals(availability.status())) {
+            return availability;
+        }
+        SignalRegistry.Verdict verdict = SignalRegistry.explain(availability.eventTypesExpected(), SignalRegistry.current());
+        if (verdict == null) {
+            return availability;
+        }
+        return new AnalyticsModels.Availability(
+                availability.status(),
+                availability.eventTypesExpected(),
+                availability.eventTypesSeen(),
+                verdict.reason(),
+                verdict.minJdk(),
+                verdict.hint());
     }
 }

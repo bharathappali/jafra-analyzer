@@ -4,9 +4,14 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import io.jafra.analyzer.signals.ContainerMath;
+import io.jafra.analyzer.signals.SignalRegistry;
 
 import org.jboss.logging.Logger;
 
@@ -128,6 +133,9 @@ public final class ChunkDecodeService {
         rows += writeStacks(metadata, chunk, resolved.id, tStart);
         rows += writeFrames(metadata, chunk, resolved.id, tStart);
         rows += writeMarkers(metadata, chunk, resolved, tStart);
+        Derived derived = derived(chunk);
+        rows += writeSignals(metadata, resolved.id, tStart, derived.facts());
+        rows += writeFinding(metadata, resolved.id, tStart, derived.facts());
         return rows;
     }
 
@@ -135,6 +143,7 @@ public final class ChunkDecodeService {
             throws Exception {
         JfrChunkReader.JvmFacts jvm = resolved.facts;
         JfrChunkReader.ContainerFacts container = chunk.container;
+        Derived derived = derived(chunk);
         List<Object> row = identity(metadata, resolved.id, tStart);
         row.add(metadata.clusterId());
         row.add(metadata.podUid());
@@ -149,14 +158,90 @@ public final class ChunkDecodeService {
         row.add(container == null ? null : container.cpuQuota());
         row.add(container == null ? null : container.cpuSlicePeriod());
         row.add(container == null ? null : container.cpuShares());
-        row.add(container == null ? null : container.memoryLimit());
+        row.add(derived.mem());
         row.add(container == null ? null : container.effectiveCpus());
         row.add(container == null ? null : container.containerType());
+        row.add(derived.young());
+        row.add(derived.old());
+        row.add(derived.facts().gcSelectedBy());
+        row.add(derived.cpuLimit());
+        row.add(derived.cpuRequest());
+        row.add(derived.quality());
+        row.add(derived.qos());
         return emit(metadata, "jvm_instance", resolved.id, tStart, List.of(
                 "cluster_id", "pod_uid", "jvm_start", "pid", "jdk_version", "jdk_feature", "vm_name",
                 "provisional", "instance_seq", "restart_reason_hint",
-                "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "container_type"),
+                "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "container_type",
+                "gc_young", "gc_old", "gc_selected_by", "cpu_limit_cores", "cpu_request_millicores_approx",
+                "cpu_request_quality", "cpu_qos"),
                 List.of(row));
+    }
+
+    private long writeSignals(ChunkMetadata metadata, String id, long tStart, SignalRegistry.Facts facts) throws Exception {
+        List<List<Object>> rows = new ArrayList<>();
+        for (SignalRegistry.Verdict verdict : SignalRegistry.get().evaluateAll(facts)) {
+            List<Object> row = identity(metadata, id, tStart);
+            row.add(verdict.id());
+            row.add(verdict.status());
+            row.add(verdict.reason());
+            row.add(verdict.minJdk());
+            row.add(verdict.hint());
+            rows.add(row);
+        }
+        return emit(metadata, "signal", id, tStart, List.of("signal_id", "status", "reason", "min_jdk", "hint"), rows);
+    }
+
+    private long writeFinding(ChunkMetadata metadata, String id, long tStart, SignalRegistry.Facts facts) throws Exception {
+        boolean serial = ContainerMath.ergonomicSerial(
+                facts.gcSelectedBy(), ContainerMath.serialInUse(facts.gc(), facts.flags()), facts.effectiveCpus(), facts.memLimit());
+        if (!serial) {
+            return 0L;
+        }
+        List<Object> row = identity(metadata, id, tStart);
+        row.add("ERGONOMIC_SERIAL_GC");
+        row.add("warn");
+        return emit(metadata, "finding", id, tStart, List.of("code", "severity"), List.of(row));
+    }
+
+    private static Derived derived(JfrChunkReader.ReadChunk chunk) {
+        Map<String, String> flags = new LinkedHashMap<>();
+        List<ContainerMath.Flag> flagRows = new ArrayList<>();
+        for (JfrChunkReader.FlagRow flag : chunk.flags) {
+            if (flag.name() == null) {
+                continue;
+            }
+            flags.put(flag.name(), flag.value());
+            flagRows.add(new ContainerMath.Flag(flag.name(), flag.value(), flag.origin()));
+        }
+        JfrChunkReader.ContainerFacts container = chunk.container;
+        String young = chunk.gcConfig == null ? null : chunk.gcConfig.young();
+        String old = chunk.gcConfig == null ? null : chunk.gcConfig.old();
+        String gc = ContainerMath.gcFamily(young, old, flags);
+        boolean sawFlags = !chunk.flags.isEmpty();
+        Long mem = container == null ? null : ContainerMath.memLimit(container.memoryLimit());
+        Long cpus = container == null ? null : container.effectiveCpus();
+        Long request = container == null ? null : ContainerMath.cpuRequestMillicores(container.cpuShares());
+        SignalRegistry.Facts facts = new SignalRegistry.Facts(
+                chunk.jvm == null ? null : feature(chunk.jvm.jdkVersion()),
+                gc,
+                ContainerMath.gcSelectedBy(sawFlags, flagRows),
+                flags,
+                sawFlags,
+                container != null,
+                chunk.seen,
+                chunk.sawProfilerEvent,
+                chunk.thresholdsMs,
+                cpus,
+                mem);
+        return new Derived(
+                facts,
+                young,
+                old,
+                container == null ? null : ContainerMath.cpuLimitCores(container.cpuQuota(), container.cpuSlicePeriod()),
+                request,
+                request == null || container == null ? null : ContainerMath.requestQuality(container.containerType()),
+                container == null ? null : ContainerMath.cpuQos(container.cpuShares()),
+                mem);
     }
 
     private long writeSettings(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, String id) throws Exception {
@@ -482,4 +567,7 @@ public final class ChunkDecodeService {
     }
 
     private record Resolved(String id, boolean provisional, IngestCatalog.InstanceState state, JfrChunkReader.JvmFacts facts) {}
+
+    private record Derived(
+            SignalRegistry.Facts facts, String young, String old, Double cpuLimit, Long cpuRequest, String quality, String qos, Long mem) {}
 }

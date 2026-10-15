@@ -68,6 +68,7 @@ class ChunkDecodeGoldenTest {
             assertTrue(countWhere(v2.resolve("marker"), "kind = 'gc_pause'") > 0L);
             assertTrue(countParquet(v2.resolve("rollup_1m")) > 0L);
             assertTrue(countParquet(v2.resolve("top_1m")) > 0L);
+            assertTrue(countParquet(v2.resolve("signal")) > 0L);
         }
     }
 

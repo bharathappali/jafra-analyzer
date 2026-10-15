@@ -50,7 +50,15 @@ public final class AnalyticsModels {
     public record Availability(
             String status,
             List<String> eventTypesExpected,
-            List<String> eventTypesSeen) {}
+            List<String> eventTypesSeen,
+            String reason,
+            Integer minJdk,
+            String hint) {
+
+        public Availability(String status, List<String> eventTypesExpected, List<String> eventTypesSeen) {
+            this(status, eventTypesExpected, eventTypesSeen, null, null, null);
+        }
+    }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record MetricSeries(

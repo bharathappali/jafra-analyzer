@@ -8,11 +8,12 @@ The time window is `last` (default `15m`, wall clock ending now, max `7d`) or a 
 
 `format=compact` (the default) rounds to 3 significant figures, sends stack ids without frame text, and omits null object fields. Nulls stay in series arrays. Bytes are integers. `format=full` keeps the raw doubles.
 
-Heap, findings, signals, and retention tombstones are not in this cut. Those blocks return `no_data_in_window`.
+A series or overview block is `unavailable` when the JVM cannot produce that signal. The body then includes `reason` (`jdk_version`, `gc_type`, `jvm_flag`, `not_in_container`, `disabled_by_profiler`, `preset_threshold`, `not_exposed_by_cgroup`), `hint`, and `min_jdk` when the JDK is too old. A supported signal with no samples in the window is `no_data_in_window`. A supported signal that counted zero stays `ok` with zeros. `GET /v2/instance` returns the JVM facts, every signal verdict, and `ERGONOMIC_SERIAL_GC` when Serial was selected ergonomically on fewer than 2 CPUs or under 1792 MiB. Heap generation frames and the other findings are not in this cut. Network stays `no_data_in_window`.
 
 | Endpoint | Reads |
 |----------|--------|
 | `GET /v2/workloads` | `jvm_instance` |
+| `GET /v2/instance` | `jvm_instance`, `signal`, `finding` |
 | `GET /v2/series?metrics=` | `rollup_1s`, `rollup_10s`, `rollup_1m` |
 | `GET /v2/top?kind=&group=&n=` | `top_1m` |
 | `GET /v2/events?type=&cursor=&limit=` | `gc`, `gc_phase`, `duration_event` |
