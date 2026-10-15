@@ -29,6 +29,8 @@ A series or overview block is `unavailable` when the JVM cannot produce that sig
 | `GET /v2/compare?metrics=&compare_from=&compare_to=` | 1m rollups |
 | `GET /v2/correlate?a=&b=` | 1m rollups |
 | `POST /mcp` | the same reads, as MCP tools |
+| `GET /v2/retention` | retention config |
+| `GET /v2/retention/tombstones?since=` | `retention.json` |
 | `GET /v2/overview` | 1m rollups |
 
 `/v2/top` returns `insufficient_samples` when the window has fewer than 300 samples. `ci95` is the normal 95% half-width of the share. More than 500 markers are clustered per minute (`count`, `max`) instead of listed. Event cursors are exclusive timestamps. `group=thread_group` and `kind=native` return `no_data_in_window` until those rankings are stored.

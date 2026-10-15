@@ -36,4 +36,11 @@ class V2ResourceTest {
     void presetsDoesNotRequireAnInstance() {
         given().get("/v2/presets").then().statusCode(200).body("presets.size()", equalTo(3));
     }
+
+    @Test
+    void retentionReportsTheModeAndReadsSendAnEtag() {
+        given().get("/v2/retention").then().statusCode(200).body("mode", equalTo("never")).body("raw_ttl_h", equalTo(48));
+        String etag = given().get("/v2/workloads").then().statusCode(200).extract().header("ETag");
+        given().header("If-None-Match", etag).get("/v2/workloads").then().statusCode(304);
+    }
 }

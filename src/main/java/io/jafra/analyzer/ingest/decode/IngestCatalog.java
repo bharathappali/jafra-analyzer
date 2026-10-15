@@ -2,6 +2,8 @@ package io.jafra.analyzer.ingest.decode;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -56,6 +58,7 @@ public final class IngestCatalog implements AutoCloseable {
                           PRIMARY KEY (jvm_instance_id, metric, series)
                         )
                         """);
+                statement.execute("ALTER TABLE chunk_ingest ADD COLUMN IF NOT EXISTS raw_purged BOOLEAN");
             }
         } catch (java.io.IOException error) {
             throw new SQLException("cannot create v2 catalog directory", error);
@@ -239,6 +242,41 @@ public final class IngestCatalog implements AutoCloseable {
         }
     }
 
+    public synchronized List<ListedInstance> instances() throws SQLException {
+        List<ListedInstance> instances = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "SELECT jvm_instance_id, namespace, pod, container, last_t_ns FROM jvm_instance_state")) {
+            while (rows.next()) {
+                instances.add(new ListedInstance(rows.getString(1), rows.getString(2), rows.getString(3), rows.getString(4),
+                        rows.getLong(5)));
+            }
+        }
+        return instances;
+    }
+
+    public synchronized List<String> chunkIds(String jvmInstanceId) throws SQLException {
+        List<String> ids = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT chunk_id FROM chunk_ingest WHERE jvm_instance_id = ?")) {
+            statement.setString(1, jvmInstanceId);
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    ids.add(rows.getString(1));
+                }
+            }
+        }
+        return ids;
+    }
+
+    public synchronized void markRawPurged(String jvmInstanceId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE chunk_ingest SET raw_purged = true WHERE jvm_instance_id = ?")) {
+            statement.setString(1, jvmInstanceId);
+            statement.executeUpdate();
+        }
+    }
+
     public synchronized int okCount() throws SQLException {
         try (Statement statement = connection.createStatement();
                 ResultSet rows = statement.executeQuery("SELECT count(*) FROM chunk_ingest WHERE status = 'ok'")) {
@@ -268,4 +306,6 @@ public final class IngestCatalog implements AutoCloseable {
             int instanceSeq, String restartReasonHint, String previousInstanceId, String previousHint, long previousEndNs) {}
 
     public record CounterCursor(Long lastTNs, Double lastValue) {}
+
+    public record ListedInstance(String id, String namespace, String pod, String container, long lastTNs) {}
 }

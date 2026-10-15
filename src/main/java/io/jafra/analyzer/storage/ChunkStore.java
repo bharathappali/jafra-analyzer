@@ -176,6 +176,31 @@ public class ChunkStore {
         }
     }
 
+    public long chunkBytes(String chunkId) {
+        Path payload = payloadPath(chunkId);
+        try {
+            return Files.isRegularFile(payload) ? Files.size(payload) : 0L;
+        } catch (IOException error) {
+            return 0L;
+        }
+    }
+
+    public long deleteChunk(String chunkId) throws IOException {
+        long bytes = chunkBytes(chunkId);
+        Path payload = payloadPaths.remove(chunkId);
+        Path meta = metaPaths.remove(chunkId);
+        if (payload != null) {
+            Files.deleteIfExists(payload);
+        }
+        if (meta != null) {
+            Files.deleteIfExists(meta);
+        }
+        committed.remove(chunkId);
+        chunkIds.remove(chunkId);
+        byRecording.values().forEach(recording -> recording.entrySet().removeIf(entry -> chunkId.equals(entry.getValue().chunkId())));
+        return bytes;
+    }
+
     public Path payloadPath(String chunkId) {
         Path known = payloadPaths.get(chunkId);
         if (known != null) {

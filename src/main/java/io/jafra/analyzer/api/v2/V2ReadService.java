@@ -19,6 +19,8 @@ import io.jafra.analyzer.findings.WindowSnapshot;
 import io.jafra.analyzer.ingest.decode.ParquetTables;
 import io.jafra.analyzer.metrics.MetricRegistry;
 import io.jafra.analyzer.recordings.stats.Pearson;
+import io.jafra.analyzer.retention.RetentionFiles;
+import io.jafra.analyzer.retention.RetentionLog;
 import io.jafra.analyzer.signals.SignalRegistry;
 
 /** Reads the v2 Parquet tables. */
@@ -53,7 +55,7 @@ public final class V2ReadService {
                 }
             }
         }
-        return tree(rows, now.toEpochMilli() * 1_000_000L);
+        return tree(rows, now.toEpochMilli() * 1_000_000L, includeTombstoned);
     }
 
     public String latestInstance(String ns, String pod, String container) throws SQLException {
@@ -127,6 +129,18 @@ public final class V2ReadService {
         List<MetricRef> refs = metrics(metrics);
         String nativePeriod = coarsestNative(refs);
         V2Window.StepChoice choice = V2Window.resolveStep(requestedStep, range, nativePeriod, maxPoints);
+        String retention = retentionState(id);
+        if ("tombstoned".equals(retention) || "deleted".equals(retention)) {
+            Map<String, Object> purged = identity(id);
+            purged.put("status", "purged");
+            purged.put("reason", RetentionFiles.REASON);
+            purged.put("step", choice.step().label);
+            purged.put("series", Map.of());
+            return purged;
+        }
+        if ("summary_only".equals(retention) && choice.step() == V2Window.Step.S1) {
+            choice = new V2Window.StepChoice(V2Window.Step.S10, true);
+        }
         long start = Math.floorDiv(range.fromNs(), choice.step().nanos) * choice.step().nanos;
         long end = range.toNs();
         List<Long> offsets = new ArrayList<>();
@@ -173,6 +187,9 @@ public final class V2ReadService {
         Map<String, Object> response = identity(id);
         response.put("step", choice.step().label);
         response.put("status", choice.coarserThanRequested() ? "coarser_than_requested" : any ? "ok" : "no_data_in_window");
+        if ("summary_only".equals(retention) && choice.coarserThanRequested()) {
+            response.put("reason", RetentionFiles.REASON);
+        }
         response.put("t0", start / 1_000_000L);
         response.put("t", offsets);
         response.put("series", series);
@@ -181,6 +198,15 @@ public final class V2ReadService {
 
     public Map<String, Object> top(Identity id, V2Window.Range range, String kind, String group, int limit, V2Window.Range compare,
             boolean compact) throws SQLException {
+        String retention = retentionState(id);
+        if ("tombstoned".equals(retention) || "deleted".equals(retention)) {
+            Map<String, Object> purged = identity(id);
+            purged.put("status", "purged");
+            purged.put("reason", RetentionFiles.REASON);
+            purged.put("samples", 0);
+            purged.put("rows", List.of());
+            return purged;
+        }
         if ("thread_group".equals(group) || "native".equals(kind)) {
             Map<String, Object> empty = identity(id);
             empty.put("samples", 0);
@@ -226,6 +252,9 @@ public final class V2ReadService {
         Map<String, Object> response = identity(id);
         response.put("samples", samples);
         response.put("status", samples < 300 ? "insufficient_samples" : "ok");
+        if ("summary_only".equals(retention)) {
+            response.put("approximate", true);
+        }
         response.put("rows", out);
         response.put("others", CompactNumbers.round(Math.max(0.0, 1.0 - shown), compact));
         return response;
@@ -234,6 +263,15 @@ public final class V2ReadService {
     public Map<String, Object> events(Identity id, V2Window.Range range, String type, Double minMs, String cursor, int limit)
             throws SQLException {
         int cap = Math.min(Math.max(limit, 1), 500);
+        String retention = retentionState(id);
+        if ("tombstoned".equals(retention) || "deleted".equals(retention)
+                || ("summary_only".equals(retention) && type != null && !"gc".equals(type))) {
+            Map<String, Object> purged = identity(id);
+            purged.put("status", "purged");
+            purged.put("reason", RetentionFiles.REASON);
+            purged.put("rows", List.of());
+            return purged;
+        }
         String table = eventTable(type);
         if (table == null) {
             Map<String, Object> empty = identity(id);
@@ -552,7 +590,11 @@ public final class V2ReadService {
         String glob = glob("g1_region_frame", id);
         Map<String, Object> body = new LinkedHashMap<>();
         if (glob == null) {
-            body.put("status", "no_data_in_window");
+            String retention = retentionState(id);
+            body.put("status", "summary_only".equals(retention) || "tombstoned".equals(retention) ? "purged" : "no_data_in_window");
+            if ("purged".equals(body.get("status"))) {
+                body.put("reason", RetentionFiles.REASON);
+            }
             return body;
         }
         String sql = "SELECT t, gc_id, type, region_count, used FROM read_parquet('" + glob
@@ -998,7 +1040,8 @@ public final class V2ReadService {
         return (share - before) / denom;
     }
 
-    private Map<String, Object> tree(List<InstanceRow> rows, long nowNs) {
+    private Map<String, Object> tree(List<InstanceRow> rows, long nowNs, boolean includeTombstoned) {
+        List<RetentionLog.Entry> marks = RetentionLog.read(root);
         Map<String, Map<String, Map<String, List<InstanceRow>>>> namespaces = new TreeMap<>();
         for (InstanceRow row : rows) {
             namespaces.computeIfAbsent(row.namespace(), ignored -> new TreeMap<>())
@@ -1034,8 +1077,22 @@ public final class V2ReadService {
                         item.put("from", Instant.ofEpochMilli(instance.fromNs() / 1_000_000L).toString());
                         item.put("to", Instant.ofEpochMilli(instance.toNs() / 1_000_000L).toString());
                         boolean live = nowNs - instance.toNs() <= LIVE_NS;
+                        RetentionLog.Entry mark = mark(marks, instance);
+                        String state = mark == null ? (live ? "live" : "ended") : mark.state;
+                        if (("tombstoned".equals(state) || "deleted".equals(state)) && !includeTombstoned) {
+                            continue;
+                        }
                         item.put("live", live);
-                        item.put("retention_state", live ? "live" : "ended");
+                        item.put("retention_state", state);
+                        long purgeAt = mark == null ? instance.toNs() + 48L * 3_600_000_000_000L : mark.purge_at * 1_000_000L;
+                        item.put("purge_at", Instant.ofEpochMilli(purgeAt / 1_000_000L).toString());
+                        Map<String, Long> sizes = RetentionFiles.bytes(root, instance.namespace(), instance.pod(), instance.container(),
+                                instance.id());
+                        Map<String, Object> bytes = new LinkedHashMap<>();
+                        bytes.put("raw", mark == null ? 0L : mark.raw);
+                        bytes.put("detail", RetentionFiles.detailBytes(sizes));
+                        bytes.put("kept", RetentionFiles.keptBytes(sizes));
+                        item.put("bytes", bytes);
                         rendered.add(item);
                     }
                     containers.add(Map.of("name", container.getKey(), "instances", rendered));
@@ -1200,6 +1257,20 @@ public final class V2ReadService {
             path += "/jvm_instance_id=" + ParquetTables.sanitize(instance);
         }
         return path;
+    }
+
+    private String retentionState(Identity id) {
+        return RetentionLog.state(root, id.ns(), id.pod(), id.container(), id.instance());
+    }
+
+    private static RetentionLog.Entry mark(List<RetentionLog.Entry> marks, InstanceRow instance) {
+        for (RetentionLog.Entry entry : marks) {
+            if (instance.namespace().equals(entry.ns) && instance.pod().equals(entry.pod) && instance.container().equals(entry.container)
+                    && instance.id().equals(entry.jvm_instance_id)) {
+                return entry;
+            }
+        }
+        return null;
     }
 
     private static Map<String, Object> identity(Identity id) {

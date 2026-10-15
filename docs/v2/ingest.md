@@ -50,6 +50,10 @@ Each chunk also writes `signal` (one row per id in `signals.yaml`) and, when it 
 
 `gc_selected_by` is `command_line` when an enabled `Use*GC` flag has origin command line, and `ergonomic` when flag events were seen and none of those flags did. `ERGONOMIC_SERIAL_GC` is recorded when that selection is ergonomic, Serial is in use, and either `effective_cpus` is below 2 or `mem_limit` is below 1792 MiB.
 
+## Retention
+
+`jafra.retention.mode` is `delete-after-48h` or `never`. Age is the time since the instance's last chunk. A live instance (a chunk in the last two minutes) is never purged by the sweep. At 48 hours the sweep deletes the raw chunk and the detail tables (`sample`, `duration_event`, `gauge`, `counter_delta`, `rollup_1s`, `g1_region_frame`, `gc_phase`) and keeps the 10 second and 1 minute rollups, markers, findings, `gc`, `top_1m`, stacks, and `jvm_instance`. The instance becomes `summary_only`. `clear-parquet-cache=true` also drops that summary and leaves a tombstone. `GET /v2/retention/tombstones` is the feed Jafra Z polls. A purged read returns `reason: retention_48h` and the coarser data that is still stored. `DELETE`, `clear-cache`, and `purge-raw` accept `dry_run=true`. There is no bearer token. GET `/v2` responses send an `ETag` from the catalog watermark and the retention file, and JSON is gzip-compressed.
+
 `jvm_instance.preset` is chosen from `jdk.ActiveSetting`: the three shipped files in `src/main/resources/jfc/` match on `jdk.ExecutionSample` period, `jdk.SocketRead` threshold, and `jdk.ContainerCPUThrottling` period. A 20 ms sample with a 20 ms socket read is `default`. Other async-profiler settings are `profile`. Anything else is `unknown`.
 
 ## Rollups
