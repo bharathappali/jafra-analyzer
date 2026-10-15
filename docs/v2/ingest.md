@@ -33,3 +33,11 @@ Markers are written at ingest: `gc_pause` at 20 ms (warn at 100 ms, critical at 
 A file older than `jafra.compact.min-age` (default 1 hour, by modification time) is merged into `hour-yyyyMMddHH.parquet` in the same partition. The sweep runs every `jafra.compact.interval` (default 10 minutes). `stack` and `frame` hour files drop exact duplicate rows.
 
 Decode runs on a pool of `jafra.decode.threads` (default 4). Catalog writes are serialized on the DuckDB file.
+
+## Rollups
+
+After each chunk, the minutes it touches are recomputed into `rollup_1s`, `rollup_10s`, and `rollup_1m`. One file per bucket is named `bucket-<epoch-ns>.parquet` and replaced when a later chunk touches that bucket. Columns are `metric`, `bucket_t`, `n`, `sum`, `min`, `max`, `p50`, `p90`, `p99`, and `last`. Percentiles are DuckDB `quantile_disc` on the raw rows in that bucket. The 1 minute duration percentiles are not merged from the 1 second files.
+
+`metrics/MetricRegistry` records each metric's id, unit, source events, kind (`gauge`, `counter`, `duration`, `sample-share`), native period, and `min_jdk`. `rss` requires JDK 21.
+
+`top_1m` keeps the top 50 keys per minute for `cpu`, `wall`, `alloc`, `lock`, `io`, and `exceptions`, grouped by `method`, `class`, `monitor`, or `target`. It is written at ingest. Files named `bucket-` and `top-` are left in place by hourly compaction so a bucket can be replaced.

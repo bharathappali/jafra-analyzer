@@ -137,7 +137,11 @@ public final class HourlyCompaction {
 
     private static boolean chunkFile(Path file) {
         String name = file.getFileName().toString();
-        return name.endsWith(".parquet") && !name.startsWith("hour-") && !name.endsWith(".partial");
+        return name.endsWith(".parquet")
+                && !name.startsWith("hour-")
+                && !name.startsWith("bucket-")
+                && !name.startsWith("top-")
+                && !name.endsWith(".partial");
     }
 
     private static String quote(Path path) {

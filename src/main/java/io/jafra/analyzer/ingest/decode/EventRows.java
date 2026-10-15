@@ -50,7 +50,9 @@ public final class EventRows {
             "jdk.SafepointBegin",
             "jdk.ExecuteVMOperation",
             "jdk.Compilation",
-            "jdk.Deoptimization");
+            "jdk.Deoptimization",
+            "jdk.JavaExceptionThrow",
+            "jdk.JavaErrorThrow");
 
     private EventRows() {}
 
@@ -194,6 +196,10 @@ public final class EventRows {
     }
 
     private static String target(RecordedEvent event) {
+        String thrown = className(event, "thrownClass");
+        if (thrown != null) {
+            return thrown;
+        }
         String path = text(event, "path");
         if (path != null) {
             return path;

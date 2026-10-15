@@ -64,6 +64,8 @@ public final class ChunkDecodeService {
             long tEnd = tStart + Math.max(0L, metadata.chunkDurationNs());
             Resolved resolved = resolve(metadata, chunk, tStart);
             long rows = write(metadata, chunk, resolved, tStart);
+            RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(),
+                    resolved.id, tStart, tEnd);
             String hint = hint(chunk);
             catalog.touchInstance(resolved.id, tEnd, hint);
             catalog.record(metadata.chunkId(), resolved.id, metadata.recordingId(), tStart, tEnd, "ok", rows, null);

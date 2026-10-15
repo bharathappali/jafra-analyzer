@@ -77,8 +77,9 @@ public final class ParquetTables {
         return switch (column) {
             case "t", "t_end", "start_t", "jvm_start", "pid", "gc_id", "instance_seq", "level",
                     "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "jdk_feature",
-                    "os_thread_id", "size", "bytes", "line", "depth", "safepoint_id" -> "BIGINT";
-            case "value", "dt_s", "delta", "sum_pause_ms", "longest_pause_ms", "dur_ms", "magnitude", "weight" -> "DOUBLE";
+                    "os_thread_id", "size", "bytes", "line", "depth", "safepoint_id", "n" -> "BIGINT";
+            case "value", "dt_s", "delta", "sum_pause_ms", "longest_pause_ms", "dur_ms", "magnitude", "weight",
+                    "sum", "min", "max", "p50", "p90", "p99", "last" -> "DOUBLE";
             case "provisional", "concurrent" -> "BOOLEAN";
             default -> "VARCHAR";
         };

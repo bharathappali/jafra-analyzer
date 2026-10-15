@@ -77,6 +77,7 @@ public final class JfrChunkReader {
                     chunk.oom = true;
                     chunk.oomT = t;
                 }
+                EventRows.accept(chunk, event, type, t);
             }
             case "jdk.ContainerConfiguration" -> chunk.container = container(event);
             case "jdk.EvacuationFailed", "jdk.PromotionFailed", "jdk.ZAllocationStall", "jdk.CodeCacheFull", "jdk.DataLoss" ->
