@@ -1,0 +1,246 @@
+package io.jafra.analyzer.ingest.decode;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+import jdk.jfr.consumer.RecordedEvent;
+import jdk.jfr.consumer.RecordingFile;
+
+/** One pass over a committed chunk with the JDK flight recorder reader. */
+public final class JfrChunkReader {
+    private JfrChunkReader() {}
+
+    public static ReadChunk read(Path payload) throws IOException {
+        ReadChunk chunk = new ReadChunk();
+        try (RecordingFile file = new RecordingFile(payload)) {
+            while (file.hasMoreEvents()) {
+                accept(chunk, file.readEvent());
+            }
+        }
+        return chunk;
+    }
+
+    private static void accept(ReadChunk chunk, RecordedEvent event) {
+        String type = event.getEventType().getName();
+        long t = epochNs(event.getStartTime());
+        switch (type) {
+            case "jdk.JVMInformation" -> chunk.jvm = jvm(event);
+            case "jdk.ActiveSetting" -> chunk.settings.add(setting(event, t));
+            case "jdk.CPULoad" -> {
+                number(event, "jvmUser").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "cpu.jvm_user", value)));
+                number(event, "jvmSystem").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "cpu.jvm_system", value)));
+                number(event, "machineTotal").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "cpu.machine_total", value)));
+            }
+            case "jdk.GCHeapSummary" -> number(event, "heapUsed").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "heap.used", value)));
+            case "jdk.ResidentSetSize" -> firstNumber(event, "size", "residentSet", "rss")
+                    .ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "rss", value)));
+            case "jdk.ContainerMemoryUsage" -> number(event, "memoryUsage")
+                    .ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "container.memory_usage", value)));
+            case "jdk.JavaThreadStatistics" -> number(event, "activeCount", "daemonCount")
+                    .ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "threads.live", value)));
+            case "jdk.ContainerCPUThrottling" -> {
+                cumulative(chunk, t, "container.cpu_throttled_ns", event, "cpuThrottledTime");
+                cumulative(chunk, t, "container.throttled_slices", event, "cpuThrottledSlices");
+                cumulative(chunk, t, "container.elapsed_slices", event, "cpuElapsedSlices");
+            }
+            case "jdk.ContainerCPUUsage" -> cumulative(chunk, t, "container.cpu_time_ns", event, "cpuTime");
+            case "jdk.ThreadAllocationStatistics" -> number(event, "allocated").ifPresent(value -> chunk.counters.add(
+                    new CounterSample(t, "alloc.bytes", text(event, "thread") == null ? "" : text(event, "thread"), value)));
+            case "jdk.ExceptionStatistics" -> cumulative(chunk, t, "exceptions.throwables", event, "throwables");
+            case "jdk.ClassLoadingStatistics" -> {
+                cumulative(chunk, t, "classes.loaded", event, "loadedClassCount");
+                cumulative(chunk, t, "classes.unloaded", event, "unloadedClassCount");
+            }
+            case "jdk.GarbageCollection" -> chunk.gcs.add(gc(event, t));
+            case "jdk.GCPhasePause", "jdk.GCPhasePauseLevel1", "jdk.GCPhasePauseLevel2", "jdk.GCPhasePauseLevel3",
+                    "jdk.GCPhasePauseLevel4" -> chunk.phases.add(phase(event, t, type));
+            case "jdk.Shutdown" -> chunk.shutdownReason = text(event, "reason");
+            case "jdk.JavaErrorThrow" -> {
+                String thrown = text(event, "thrownClass", "message");
+                if (thrown != null && thrown.contains("OutOfMemoryError")) {
+                    chunk.oom = true;
+                }
+            }
+            case "jdk.ContainerConfiguration" -> chunk.container = container(event);
+            default -> {
+            }
+        }
+    }
+
+    private static JvmFacts jvm(RecordedEvent event) {
+        Long start = longValue(event, "jvmStartTime");
+        Long pid = longValue(event, "pid");
+        return new JvmFacts(
+                text(event, "jvmVersion", "javaVersion"),
+                text(event, "jvmName", "vmName"),
+                start == null ? 0L : start,
+                pid == null ? 0L : pid);
+    }
+
+    private static ContainerFacts container(RecordedEvent event) {
+        return new ContainerFacts(
+                longValue(event, "cpuQuota"),
+                longValue(event, "cpuSlicePeriod"),
+                longValue(event, "cpuShares"),
+                longValue(event, "memoryLimit"),
+                longValue(event, "effectiveCpuCount"),
+                text(event, "containerType"));
+    }
+
+    private static SettingRow setting(RecordedEvent event, long t) {
+        return new SettingRow(t, text(event, "id", "name"), text(event, "setting", "name"), text(event, "value"));
+    }
+
+    private static GcRow gc(RecordedEvent event, long t) {
+        String name = text(event, "name");
+        return new GcRow(
+                t,
+                longValue(event, "gcId"),
+                name,
+                text(event, "cause"),
+                kind(name),
+                durationMs(event, "sumOfPauses"),
+                durationMs(event, "longestPause"));
+    }
+
+    private static GcPhaseRow phase(RecordedEvent event, long t, String type) {
+        int level = 0;
+        if (type.endsWith("Level1")) {
+            level = 1;
+        } else if (type.endsWith("Level2")) {
+            level = 2;
+        } else if (type.endsWith("Level3")) {
+            level = 3;
+        } else if (type.endsWith("Level4")) {
+            level = 4;
+        }
+        double dur = event.getDuration() == null ? 0.0 : event.getDuration().toNanos() / 1_000_000.0;
+        return new GcPhaseRow(t, longValue(event, "gcId"), level, text(event, "name"), t, dur, false);
+    }
+
+    private static void cumulative(ReadChunk chunk, long t, String metric, RecordedEvent event, String field) {
+        number(event, field).ifPresent(value -> chunk.counters.add(new CounterSample(t, metric, "", value)));
+    }
+
+    private static String kind(String name) {
+        if (name == null) {
+            return "old";
+        }
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.contains("young")) {
+            return "young";
+        }
+        if (lower.contains("mixed")) {
+            return "mixed";
+        }
+        if (lower.contains("full")) {
+            return "full";
+        }
+        if (lower.contains("concurrent")) {
+            return "concurrent_start";
+        }
+        return "old";
+    }
+
+    private static Double durationMs(RecordedEvent event, String field) {
+        if (!event.hasField(field)) {
+            return null;
+        }
+        Object value = event.getValue(field);
+        if (value instanceof Duration duration) {
+            return duration.toNanos() / 1_000_000.0;
+        }
+        java.util.OptionalDouble parsed = number(event, field);
+        return parsed.isPresent() ? parsed.getAsDouble() : null;
+    }
+
+    private static java.util.OptionalDouble number(RecordedEvent event, String... fields) {
+        for (String field : fields) {
+            if (!event.hasField(field)) {
+                continue;
+            }
+            Object value = event.getValue(field);
+            if (value instanceof Number number) {
+                return java.util.OptionalDouble.of(number.doubleValue());
+            }
+            if (value instanceof Duration duration) {
+                return java.util.OptionalDouble.of(duration.toNanos());
+            }
+        }
+        return java.util.OptionalDouble.empty();
+    }
+
+    private static java.util.OptionalDouble firstNumber(RecordedEvent event, String... fields) {
+        return number(event, fields);
+    }
+
+    private static Long longValue(RecordedEvent event, String field) {
+        if (!event.hasField(field)) {
+            return null;
+        }
+        Object value = event.getValue(field);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof Instant instant) {
+            return instant.toEpochMilli();
+        }
+        return null;
+    }
+
+    private static String text(RecordedEvent event, String... fields) {
+        for (String field : fields) {
+            if (!event.hasField(field)) {
+                continue;
+            }
+            Object value = event.getValue(field);
+            if (value == null) {
+                continue;
+            }
+            String text = String.valueOf(value);
+            if (!text.isBlank()) {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    private static long epochNs(Instant instant) {
+        if (instant == null) {
+            return 0L;
+        }
+        return instant.getEpochSecond() * 1_000_000_000L + instant.getNano();
+    }
+
+    public static final class ReadChunk {
+        JvmFacts jvm;
+        ContainerFacts container;
+        String shutdownReason;
+        boolean oom;
+        final List<SettingRow> settings = new ArrayList<>();
+        final List<GaugePoint> gauges = new ArrayList<>();
+        final List<CounterSample> counters = new ArrayList<>();
+        final List<GcRow> gcs = new ArrayList<>();
+        final List<GcPhaseRow> phases = new ArrayList<>();
+    }
+
+    public record JvmFacts(String jdkVersion, String vmName, long jvmStartTimeMs, long pid) {}
+
+    public record ContainerFacts(
+            Long cpuQuota, Long cpuSlicePeriod, Long cpuShares, Long memoryLimit, Long effectiveCpus, String containerType) {}
+
+    public record SettingRow(long t, String eventType, String setting, String value) {}
+
+    public record GaugePoint(long t, String metric, double value) {}
+
+    public record CounterSample(long t, String metric, String series, double cumulative) {}
+
+    public record GcRow(long t, Long gcId, String name, String cause, String kind, Double sumPauseMs, Double longestPauseMs) {}
+
+    public record GcPhaseRow(long t, Long gcId, int level, String name, long startT, double durMs, boolean concurrent) {}
+}

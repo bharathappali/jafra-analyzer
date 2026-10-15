@@ -26,6 +26,8 @@ Files left in the old `chunks/<chunkId>.jfr` and `chunks/<chunkId>.meta` layout 
 
 Out-of-order chunks stay on disk until the hole at offset 0 is filled; only the contiguous prefix is passed to JMC. Startup deletes a leftover `stitch-cache/` directory from older builds. It never deletes `data/` or `meta/`.
 
+Accepted chunks are also decoded once into `v2/` Parquet. See [docs/v2/ingest.md](docs/v2/ingest.md).
+
 ## Build
 
 ```bash
