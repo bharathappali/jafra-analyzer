@@ -50,6 +50,8 @@ Each chunk also writes `signal` (one row per id in `signals.yaml`) and, when it 
 
 `gc_selected_by` is `command_line` when an enabled `Use*GC` flag has origin command line, and `ergonomic` when flag events were seen and none of those flags did. `ERGONOMIC_SERIAL_GC` is recorded when that selection is ergonomic, Serial is in use, and either `effective_cpus` is below 2 or `mem_limit` is below 1792 MiB.
 
+`jvm_instance.preset` is chosen from `jdk.ActiveSetting`: the three shipped files in `src/main/resources/jfc/` match on `jdk.ExecutionSample` period, `jdk.SocketRead` threshold, and `jdk.ContainerCPUThrottling` period. A 20 ms sample with a 20 ms socket read is `default`. Other async-profiler settings are `profile`. Anything else is `unknown`.
+
 ## Rollups
 
 After each chunk, the minutes it touches are recomputed into `rollup_1s`, `rollup_10s`, and `rollup_1m`. One file per bucket is named `bucket-<epoch-ns>.parquet` and replaced when a later chunk touches that bucket. Columns are `metric`, `bucket_t`, `n`, `sum`, `min`, `max`, `p50`, `p90`, `p99`, and `last`. Percentiles are DuckDB `quantile_disc` on the raw rows in that bucket. The 1 minute duration percentiles are not merged from the 1 second files.

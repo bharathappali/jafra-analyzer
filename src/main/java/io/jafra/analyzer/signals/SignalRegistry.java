@@ -99,8 +99,7 @@ public final class SignalRegistry {
         if (signal.thresholdMs != null && signal.thresholdEvent != null) {
             Double configured = facts.thresholdMs.get(signal.thresholdEvent);
             if (configured != null && configured >= signal.thresholdMs && !overlaps(signal.events, facts.seen)) {
-                return unavailable(signal, "preset_threshold", null,
-                        "Events below " + signal.thresholdMs.intValue() + " ms aren't recorded with preset low; use jafra.io/profile=medium.");
+                return unavailable(signal, "preset_threshold", null, thresholdHint(signal, facts, configured));
             }
         }
         return new Verdict(signal.id, "available", null, null, null);
@@ -155,6 +154,15 @@ public final class SignalRegistry {
                         + " < 2 or memory limit < 1792 MB)."
                 : ".";
         return "Only with " + String.join(" or ", signal.gcs) + "; this JVM runs " + actual + tail;
+    }
+
+    private static String thresholdHint(Signal signal, Facts facts, double configured) {
+        int ms = (int) Math.round(configured);
+        String name = facts.preset == null || facts.preset.isBlank() ? "unknown" : facts.preset;
+        String kind = signal.thresholdEvent != null && (signal.thresholdEvent.contains("Socket") || signal.thresholdEvent.contains("File"))
+                ? "I/O"
+                : signal.thresholdEvent;
+        return kind + " events ≥ " + ms + " ms (" + name + ").";
     }
 
     private static String flagHint(String flag) {
@@ -269,10 +277,11 @@ public final class SignalRegistry {
             boolean profiler,
             Map<String, Double> thresholdMs,
             Long effectiveCpus,
-            Long memLimit) {
+            Long memLimit,
+            String preset) {
 
         public static Facts empty() {
-            return new Facts(null, null, null, Map.of(), false, false, Set.of(), false, Map.of(), null, null);
+            return new Facts(null, null, null, Map.of(), false, false, Set.of(), false, Map.of(), null, null, null);
         }
     }
 

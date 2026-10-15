@@ -90,7 +90,7 @@ public final class SignalFactsProbe {
         String selected = ContainerMath.gcSelectedBy(sawFlags, flags.entrySet().stream()
                 .map(entry -> new ContainerMath.Flag(entry.getKey(), entry.getValue(), flagOrigin(events, available, entry.getKey())))
                 .toList());
-        return new SignalRegistry.Facts(feature, gc, selected, flags, sawFlags, inContainer, available, profiler, thresholds, cpus, mem);
+        return new SignalRegistry.Facts(feature, gc, selected, flags, sawFlags, inContainer, available, profiler, thresholds, cpus, mem, null);
     }
 
     private static String flagOrigin(IItemCollection events, Set<String> available, String name) {

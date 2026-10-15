@@ -15,7 +15,7 @@ class AvailabilityReasonTest {
     @Test
     void absentRssOnJdk17KeepsAbsentAndAddsTheRegistryReason() {
         SignalRegistry.bind(new SignalRegistry.Facts(
-                17, "G1", "command_line", Map.of(), true, true, Set.of(), false, Map.of(), 4L, 4L << 30));
+                17, "G1", "command_line", Map.of(), true, true, Set.of(), false, Map.of(), 4L, 4L << 30, null));
         try {
             AnalyticsModels.Availability availability = AnalyticsSubsystemSupport.avail(List.of("jdk.ResidentSetSize"), Set.of());
             assertEquals(AnalyticsModels.AVAIL_ABSENT, availability.status());

@@ -63,6 +63,6 @@ class SignalRegistryTest {
     private static SignalRegistry.Facts facts(
             int jdk, String gc, String selected, Map<String, String> flags, boolean sawFlags, boolean container, Set<String> seen,
             boolean profiler, Map<String, Double> thresholds, long cpus, long mem) {
-        return new SignalRegistry.Facts(jdk, gc, selected, flags, sawFlags, container, seen, profiler, thresholds, cpus, mem);
+        return new SignalRegistry.Facts(jdk, gc, selected, flags, sawFlags, container, seen, profiler, thresholds, cpus, mem, "low");
     }
 }

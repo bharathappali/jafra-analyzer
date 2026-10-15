@@ -14,6 +14,7 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 
 import io.jafra.analyzer.api.RecordingWindowSelection;
+import io.jafra.analyzer.presets.Presets;
 
 /** Read API over the ingest Parquet tables. Findings are evaluated on the request window. */
 @Path("/v2")
@@ -24,6 +25,12 @@ public class V2Resource {
     @Inject
     public V2Resource(V2Database database) {
         this.reads = new V2ReadService(database.connection(), database.root());
+    }
+
+    @GET
+    @Path("presets")
+    public Map<String, Object> presets() {
+        return Map.of("presets", Presets.catalog());
     }
 
     @GET

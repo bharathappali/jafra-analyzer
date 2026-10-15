@@ -76,7 +76,7 @@ public final class V2ReadService {
                     + arg("jdk_version") + ", " + arg("jdk_feature") + ", " + arg("pid") + ", " + arg("jvm_start") + ", "
                     + arg("gc_young") + ", " + arg("gc_old") + ", " + arg("gc_selected_by") + ", " + arg("effective_cpus") + ", "
                     + arg("cpu_limit_cores") + ", " + arg("cpu_request_millicores_approx") + ", " + arg("cpu_request_quality") + ", "
-                    + arg("cpu_qos") + ", " + arg("mem_limit") + ", " + arg("container_type")
+                    + arg("cpu_qos") + ", " + arg("mem_limit") + ", " + arg("container_type") + ", " + arg("preset")
                     + " FROM read_parquet('" + instances + "', hive_partitioning=false, union_by_name=true)";
             try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
                 if (result.next()) {
@@ -95,6 +95,7 @@ public final class V2ReadService {
                     put(jvm, "cpu_qos", result.getString(12));
                     put(jvm, "mem_limit", result.getObject(13));
                     put(jvm, "container_type", result.getString(14));
+                    put(jvm, "preset", result.getString(15));
                     response.put("jvm", jvm);
                 }
             }

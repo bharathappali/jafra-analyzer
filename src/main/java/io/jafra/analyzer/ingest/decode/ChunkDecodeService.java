@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import io.jafra.analyzer.presets.Presets;
 import io.jafra.analyzer.signals.ContainerMath;
 import io.jafra.analyzer.signals.SignalRegistry;
 
@@ -169,12 +170,13 @@ public final class ChunkDecodeService {
         row.add(derived.cpuRequest());
         row.add(derived.quality());
         row.add(derived.qos());
+        row.add(derived.facts().preset());
         return emit(metadata, "jvm_instance", resolved.id, tStart, List.of(
                 "cluster_id", "pod_uid", "jvm_start", "pid", "jdk_version", "jdk_feature", "vm_name",
                 "provisional", "instance_seq", "restart_reason_hint",
                 "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "container_type",
                 "gc_young", "gc_old", "gc_selected_by", "cpu_limit_cores", "cpu_request_millicores_approx",
-                "cpu_request_quality", "cpu_qos"),
+                "cpu_request_quality", "cpu_qos", "preset"),
                 List.of(row));
     }
 
@@ -222,6 +224,11 @@ public final class ChunkDecodeService {
         Long mem = container == null ? null : ContainerMath.memLimit(container.memoryLimit());
         Long cpus = container == null ? null : container.effectiveCpus();
         Long request = container == null ? null : ContainerMath.cpuRequestMillicores(container.cpuShares());
+        String preset = Presets.match(
+                setting(chunk, "jdk.ExecutionSample", "period"),
+                setting(chunk, "jdk.SocketRead", "threshold"),
+                setting(chunk, "jdk.ContainerCPUThrottling", "period"),
+                chunk.sawProfilerEvent);
         SignalRegistry.Facts facts = new SignalRegistry.Facts(
                 chunk.jvm == null ? null : feature(chunk.jvm.jdkVersion()),
                 gc,
@@ -233,7 +240,8 @@ public final class ChunkDecodeService {
                 chunk.sawProfilerEvent,
                 chunk.thresholdsMs,
                 cpus,
-                mem);
+                mem,
+                preset);
         return new Derived(
                 facts,
                 young,
@@ -243,6 +251,16 @@ public final class ChunkDecodeService {
                 request == null || container == null ? null : ContainerMath.requestQuality(container.containerType()),
                 container == null ? null : ContainerMath.cpuQos(container.cpuShares()),
                 mem);
+    }
+
+    private static String setting(JfrChunkReader.ReadChunk chunk, String event, String name) {
+        String value = null;
+        for (JfrChunkReader.SettingRow row : chunk.settings) {
+            if (event.equals(row.eventType()) && name.equals(row.setting())) {
+                value = row.value();
+            }
+        }
+        return value;
     }
 
     private long writeSettings(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, String id) throws Exception {

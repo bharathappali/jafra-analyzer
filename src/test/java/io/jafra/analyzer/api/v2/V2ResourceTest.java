@@ -31,4 +31,9 @@ class V2ResourceTest {
     void workloadsDoesNotRequireAnInstance() {
         given().get("/v2/workloads").then().statusCode(200);
     }
+
+    @Test
+    void presetsDoesNotRequireAnInstance() {
+        given().get("/v2/presets").then().statusCode(200).body("presets.size()", equalTo(3));
+    }
 }
