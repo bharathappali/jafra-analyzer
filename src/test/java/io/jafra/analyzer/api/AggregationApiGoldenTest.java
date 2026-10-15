@@ -1,6 +1,7 @@
 package io.jafra.analyzer.api;
 
 import static io.jafra.analyzer.test.GoldenWorkloadQuery.workloadWindow;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.notNullValue;
@@ -30,6 +31,9 @@ class AggregationApiGoldenTest {
                 .get("/api/v1/aggregations/gc-pauses")
                 .then()
                 .statusCode(200)
+                .header("Deprecation", equalTo(V1DeprecationFilter.DEPRECATION))
+                .header("Link", containsString("/v2/events"))
+                .header("Link", containsString("successor-version"))
                 .body("kind", equalTo("gc-pauses"))
                 .body("stats.count", greaterThan(0))
                 .body("stats.maxMs", greaterThan(0.0f));

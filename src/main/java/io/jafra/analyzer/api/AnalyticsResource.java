@@ -1,6 +1,6 @@
 package io.jafra.analyzer.api;
 
-import java.io.IOException;
+import java.sql.SQLException;
 
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
@@ -9,7 +9,7 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 
-import io.jafra.analyzer.recordings.JfrAnalyticsService;
+import io.jafra.analyzer.recordings.V1DuckReadService;
 import io.jafra.analyzer.recordings.analytics.AnalyticsModels;
 import io.smallrye.common.annotation.Blocking;
 
@@ -20,7 +20,7 @@ public class AnalyticsResource {
     RecordingWindowSelection selection;
 
     @Inject
-    JfrAnalyticsService analytics;
+    V1DuckReadService analytics;
 
     @GET
     @Path("timeseries")
@@ -54,7 +54,7 @@ public class AnalyticsResource {
                         return analytics.timeseries(selected, top, bucketSeconds, subsystem, stackIds(stacks));
                     } catch (IllegalArgumentException error) {
                         throw RecordingWindowSelection.badRequest(error.getMessage());
-                    } catch (IOException error) {
+                    } catch (SQLException error) {
                         throw RecordingWindowSelection.unavailable(selected, error.getMessage());
                     }
                 });
@@ -89,7 +89,7 @@ public class AnalyticsResource {
                         return analytics.dailyStats(selected, top, subsystem, stackIds(stacks));
                     } catch (IllegalArgumentException error) {
                         throw RecordingWindowSelection.badRequest(error.getMessage());
-                    } catch (IOException error) {
+                    } catch (SQLException error) {
                         throw RecordingWindowSelection.unavailable(selected, error.getMessage());
                     }
                 });

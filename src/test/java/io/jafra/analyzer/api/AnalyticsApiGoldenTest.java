@@ -1,6 +1,7 @@
 package io.jafra.analyzer.api;
 
 import static io.jafra.analyzer.test.GoldenWorkloadQuery.workloadWindow;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasKey;
@@ -31,6 +32,8 @@ class AnalyticsApiGoldenTest {
                 .get("/api/v1/analytics/timeseries")
                 .then()
                 .statusCode(200)
+                .header("Deprecation", equalTo(V1DeprecationFilter.DEPRECATION))
+                .header("Link", containsString("/v2/series"))
                 .body("schemaVersion", equalTo(1))
                 .body("mode", equalTo("timeseries"))
                 .body("subsystems", hasKey("cpu"))
@@ -117,6 +120,7 @@ class AnalyticsApiGoldenTest {
                 .get("/api/v1/analytics/daily_stats")
                 .then()
                 .statusCode(200)
+                .header("Link", containsString("/v2/overview"))
                 .body("mode", equalTo("daily_stats"))
                 .body("subsystems.gc", hasKey("rollup"))
                 .body("subsystems.gc.series", equalTo(null))

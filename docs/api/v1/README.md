@@ -2,6 +2,8 @@
 
 Reference for `jafra-analyzer` on port **8080** (`application/json`). All examples use the **golden JFR fixture** workload committed under `src/test/resources/jfr-fixtures/chunks/` (15 chunks, ~2.1 MiB, `auth-cache` on Kubernetes).
 
+Every `/api/v1` response sends `Deprecation: Thu, 15 Oct 2026 00:00:00 GMT` and a `Link` header with `rel="successor-version"`. `/api/v1/analytics` and `/api/v1/aggregations` are computed from the decoded Parquet tables. The other v1 endpoints still re-parse chunks with JMC. The successor for analytics timeseries and aggregation trends is `/v2/series`. Daily stats point at `/v2/overview`. Sample and allocation rankings point at `/v2/top`. GC pauses, contention, and exceptions point at `/v2/events`. Stacks point at `/v2/stacks`. Everything else points at `/v2`.
+
 ## Golden fixture identity (copy-paste)
 
 | Field | Value |

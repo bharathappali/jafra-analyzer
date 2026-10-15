@@ -2,7 +2,7 @@
 
 [← Index](README.md)
 
-`GET /api/v1/aggregations/{kind}` — algorithm helpers aligned with `analysis_algo.md`.
+`GET /api/v1/aggregations/{kind}` — the same JSON shape, read from the decoded Parquet tables. Responses send `Deprecation` and `Link` with `rel="successor-version"` (`/v2/top` for samples and allocations, `/v2/series` for trends, `/v2/events` for the rest).
 
 **Common request (golden full window)**
 

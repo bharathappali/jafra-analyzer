@@ -80,6 +80,11 @@ public class DecodePipeline {
         return retention;
     }
 
+    /** Decode any committed chunk the manifest has not marked ok. A repeat call is a no-op. */
+    public void ensureDecoded() {
+        decoder.backfill();
+    }
+
     void onCommit(ChunkMetadata metadata) {
         executor.submit(() -> decoder.decode(metadata));
     }

@@ -1,6 +1,6 @@
 package io.jafra.analyzer.api;
 
-import java.io.IOException;
+import java.sql.SQLException;
 
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
@@ -11,6 +11,7 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 
 import io.jafra.analyzer.recordings.JfrAggregationService;
+import io.jafra.analyzer.recordings.V1DuckReadService;
 import io.smallrye.common.annotation.Blocking;
 
 @Path("/api/v1/aggregations")
@@ -20,7 +21,7 @@ public class AggregationsResource {
     RecordingWindowSelection selection;
 
     @Inject
-    JfrAggregationService aggregations;
+    V1DuckReadService aggregations;
 
     @GET
     @Path("{kind}")
@@ -56,7 +57,7 @@ public class AggregationsResource {
                                 selected, kind, limit, minDuration, flavor, AnalyticsResource.stackIds(stacks));
                     } catch (IllegalArgumentException error) {
                         throw RecordingWindowSelection.badRequest(error.getMessage());
-                    } catch (IOException error) {
+                    } catch (SQLException error) {
                         throw RecordingWindowSelection.unavailable(selected, error.getMessage());
                     }
                 });

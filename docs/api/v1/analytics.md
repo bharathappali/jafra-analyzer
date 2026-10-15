@@ -2,7 +2,7 @@
 
 [← Index](README.md)
 
-LLM-oriented documents: fixed **14 subsystems**, pre-computed rollups, bucketed **series** (timeseries only), **evidence** top-N, **dataQuality**, and **correlations**.
+LLM-oriented documents: fixed **14 subsystems**, pre-computed rollups, bucketed **series** (timeseries only), **evidence** top-N, **dataQuality**, and **correlations**. The numbers come from the 1 minute rollups and the decoded sample, duration, and GC tables. The response shape is unchanged. `Deprecation` and `Link: </v2/series>; rel="successor-version"` (daily stats: `/v2/overview`) are on every response.
 
 `schemaVersion` is always **1**.
 
