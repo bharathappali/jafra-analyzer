@@ -5,8 +5,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
@@ -22,6 +24,7 @@ public final class JfrChunkReader {
                 accept(chunk, file.readEvent());
             }
         }
+        EventRows.retagProfilerCpu(chunk);
         return chunk;
     }
 
@@ -30,7 +33,15 @@ public final class JfrChunkReader {
         long t = epochNs(event.getStartTime());
         switch (type) {
             case "jdk.JVMInformation" -> chunk.jvm = jvm(event);
-            case "jdk.ActiveSetting" -> chunk.settings.add(setting(event, t));
+            case "jdk.ActiveSetting" -> {
+                SettingRow row = setting(event, t);
+                chunk.settings.add(row);
+                String blob = ((row.eventType() == null ? "" : row.eventType()) + " " + (row.value() == null ? "" : row.value()))
+                        .toLowerCase(Locale.ROOT);
+                if (blob.contains("ctimer") || blob.contains("async")) {
+                    chunk.sawProfilerEvent = true;
+                }
+            }
             case "jdk.CPULoad" -> {
                 number(event, "jvmUser").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "cpu.jvm_user", value)));
                 number(event, "jvmSystem").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "cpu.jvm_system", value)));
@@ -64,11 +75,13 @@ public final class JfrChunkReader {
                 String thrown = text(event, "thrownClass", "message");
                 if (thrown != null && thrown.contains("OutOfMemoryError")) {
                     chunk.oom = true;
+                    chunk.oomT = t;
                 }
             }
             case "jdk.ContainerConfiguration" -> chunk.container = container(event);
-            default -> {
-            }
+            case "jdk.EvacuationFailed", "jdk.PromotionFailed", "jdk.ZAllocationStall", "jdk.CodeCacheFull", "jdk.DataLoss" ->
+                    chunk.signals.add(new SignalEvent(t, type));
+            default -> EventRows.accept(chunk, event, type, t);
         }
     }
 
@@ -222,11 +235,25 @@ public final class JfrChunkReader {
         ContainerFacts container;
         String shutdownReason;
         boolean oom;
+        long oomT;
+        boolean sawProfilerEvent;
         final List<SettingRow> settings = new ArrayList<>();
         final List<GaugePoint> gauges = new ArrayList<>();
         final List<CounterSample> counters = new ArrayList<>();
         final List<GcRow> gcs = new ArrayList<>();
         final List<GcPhaseRow> phases = new ArrayList<>();
+        final List<SampleRow> samples = new ArrayList<>();
+        final List<DurationRow> durations = new ArrayList<>();
+        final List<SignalEvent> signals = new ArrayList<>();
+        final List<Long> deoptTimes = new ArrayList<>();
+        final Map<String, StackRow> stacks = new LinkedHashMap<>();
+        final Map<String, FrameRow> frames = new LinkedHashMap<>();
+        Double throttleSlices;
+        long throttleT;
+        Double throttleRatio;
+        long throttleRatioT;
+        Double exceptionRate;
+        long exceptionRateT;
     }
 
     public record JvmFacts(String jdkVersion, String vmName, long jvmStartTimeMs, long pid) {}
@@ -243,4 +270,22 @@ public final class JfrChunkReader {
     public record GcRow(long t, Long gcId, String name, String cause, String kind, Double sumPauseMs, Double longestPauseMs) {}
 
     public record GcPhaseRow(long t, Long gcId, int level, String name, long startT, double durMs, boolean concurrent) {}
+
+    public record SampleRow(
+            long t, String kind, String source, Long osThreadId, String threadGroup, String state, String stackId, Double weight,
+            String objectClass, Long size) {
+        SampleRow withSource(String updated) {
+            return new SampleRow(t, kind, updated, osThreadId, threadGroup, state, stackId, weight, objectClass, size);
+        }
+    }
+
+    public record DurationRow(
+            long t, String type, double durMs, Long osThreadId, String threadGroup, String stackId, String target, String monitorClass,
+            String parkedClass, String previousOwner, Long bytes, String opName, Long safepointId, Double ttspMs) {}
+
+    public record StackRow(String stackId, String frames, String leafFrameId, String topAppFrameId, int depth) {}
+
+    public record FrameRow(String frameId, String className, String method, String descriptor, int line, String type, String category) {}
+
+    public record SignalEvent(long t, String type) {}
 }

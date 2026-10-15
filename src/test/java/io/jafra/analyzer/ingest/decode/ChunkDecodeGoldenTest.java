@@ -45,6 +45,27 @@ class ChunkDecodeGoldenTest {
             assertEquals(gcEvents, gcRows);
             assertTrue(gcRows > 0L);
             assertTrue(countParquet(v2.resolve("jvm_instance")) > 0L);
+
+            long sampleEvents = 0L;
+            long durationEvents = 0L;
+            for (ChunkStore.StoredChunk stored : store.storedChunks()) {
+                try (RecordingFile file = new RecordingFile(stored.payload())) {
+                    while (file.hasMoreEvents()) {
+                        String type = file.readEvent().getEventType().getName();
+                        if (EventRows.isSample(type)) {
+                            sampleEvents++;
+                        }
+                        if (EventRows.isDuration(type)) {
+                            durationEvents++;
+                        }
+                    }
+                }
+            }
+            assertEquals(sampleEvents, countParquet(v2.resolve("sample")));
+            assertEquals(durationEvents, countParquet(v2.resolve("duration_event")));
+            assertTrue(countParquet(v2.resolve("stack")) > 0L);
+            assertTrue(countParquet(v2.resolve("frame")) > 0L);
+            assertTrue(countWhere(v2.resolve("marker"), "kind = 'gc_pause'") > 0L);
         }
     }
 
@@ -55,6 +76,18 @@ class ChunkDecodeGoldenTest {
                 Statement statement = connection.createStatement();
                 ResultSet rows = statement.executeQuery(
                         "SELECT count(*) FROM read_parquet('" + glob + "', hive_partitioning=false)")) {
+            rows.next();
+            return rows.getLong(1);
+        }
+    }
+
+    private static long countWhere(Path table, String where) throws Exception {
+        String glob = table.toAbsolutePath().toString().replace("'", "''") + "/**/*.parquet";
+        IngestCatalog.ensureDriver();
+        try (var connection = DriverManager.getConnection("jdbc:duckdb:");
+                Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "SELECT count(*) FROM read_parquet('" + glob + "', hive_partitioning=false) WHERE " + where)) {
             rows.next();
             return rows.getLong(1);
         }

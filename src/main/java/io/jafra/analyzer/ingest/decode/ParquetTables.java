@@ -65,7 +65,7 @@ public final class ParquetTables {
             if (!builder.isEmpty()) {
                 builder.append(", ");
             }
-            builder.append(column).append(' ').append(sqlType(table, column));
+            builder.append('"').append(column).append("\" ").append(sqlType(table, column));
         }
         return builder.toString();
     }
@@ -76,8 +76,9 @@ public final class ParquetTables {
         }
         return switch (column) {
             case "t", "t_end", "start_t", "jvm_start", "pid", "gc_id", "instance_seq", "level",
-                    "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "jdk_feature" -> "BIGINT";
-            case "value", "dt_s", "delta", "sum_pause_ms", "longest_pause_ms", "dur_ms", "magnitude" -> "DOUBLE";
+                    "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "jdk_feature",
+                    "os_thread_id", "size", "bytes", "line", "depth", "safepoint_id" -> "BIGINT";
+            case "value", "dt_s", "delta", "sum_pause_ms", "longest_pause_ms", "dur_ms", "magnitude", "weight" -> "DOUBLE";
             case "provisional", "concurrent" -> "BOOLEAN";
             default -> "VARCHAR";
         };

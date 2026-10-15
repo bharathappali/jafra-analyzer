@@ -1,4 +1,4 @@
-# v2 ingest (identity and first tables)
+# v2 ingest (identity, detail tables, compaction)
 
 On each committed chunk, and again at startup for any chunk not already marked ok, the analyzer decodes the payload once with `jdk.jfr.consumer.RecordingFile` and writes zstd Parquet under `jafra.storage.root`:
 
@@ -22,6 +22,14 @@ Counter deltas (`counter_delta`) are computed only inside one instance. A cumula
 
 ## Tables in this cut
 
-`jvm_instance`, `active_setting`, `gauge`, `counter_delta`, `gc`, `gc_phase`, and `marker` (restart only). Every row includes `namespace`, `pod`, `container`, `jvm_instance_id`, and `t` (epoch nanoseconds).
+`jvm_instance`, `active_setting`, `gauge`, `counter_delta`, `gc`, `gc_phase`, `sample`, `duration_event`, `stack`, `frame`, and `marker`. Every row includes `namespace`, `pod`, `container`, `jvm_instance_id`, and `t` (epoch nanoseconds).
+
+`sample.kind` is `cpu`, `wall`, `alloc`, `lock`, `native_malloc`, `native_free`, `native_lock`, or `cputime`. `source` is `async_profiler` for `profiler.*` events, and for `jdk.ExecutionSample` / `jdk.NativeMethodSample` when the chunk contains a profiler event or an active setting of `ctimer` / `async`. Other samples stay `jfr`. Lock and native-lock events are written to both `sample` and `duration_event`.
+
+`stack_id` uses the same 16-hex hash as the v1 stack catalog (top 64 frames: method, line, type) but the frames are stored in Parquet, so the id survives a process restart. `frame_id` hashes class, method, descriptor, line, and type. `category` is `app`, `jdk`, `framework`, `vm`, `gc`, `jit`, `native`, or `profiler`. Framework prefixes are `io.quarkus`, `org.springframework`, `io.netty`, `io.vertx`, `org.hibernate`, and `com.zaxxer`. `thread_group` replaces trailing digits with `*`. The thread key is `os_thread_id`, falling back to the Java thread id.
+
+Markers are written at ingest: `gc_pause` at 20 ms (warn at 100 ms, critical at 500 ms), `full_gc`, evacuation and promotion failure, ZGC allocation stall, safepoint (10 ms total or 5 ms time-to-safepoint, warn at 50 ms), `vm_op` at 50 ms, `cpu_throttle` at ratio 0.2 (critical at 0.5), `deopt_burst` at 50 deoptimizations in 10 seconds, code cache full, data loss, `oom`, `exception_burst` at 10k throwables per second, and `jvm_restart`.
+
+A file older than `jafra.compact.min-age` (default 1 hour, by modification time) is merged into `hour-yyyyMMddHH.parquet` in the same partition. The sweep runs every `jafra.compact.interval` (default 10 minutes). `stack` and `frame` hour files drop exact duplicate rows.
 
 Decode runs on a pool of `jafra.decode.threads` (default 4). Catalog writes are serialized on the DuckDB file.

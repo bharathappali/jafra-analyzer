@@ -26,6 +26,18 @@ public final class StackIds {
         return CATALOG.computeIfAbsent(stackId, ignored -> identify(stackId, frames));
     }
 
+    /** Same 16-hex id as {@link #intern}, without storing the stack in the process catalog. */
+    public static String idOf(List<Frame> frames) {
+        if (frames == null || frames.isEmpty()) {
+            return null;
+        }
+        return hash(frames, ID_FRAMES);
+    }
+
+    public static boolean platformClass(String className) {
+        return isPlatform(className);
+    }
+
     public static Identity get(String stackId) {
         if (stackId == null || stackId.isBlank()) {
             return null;
