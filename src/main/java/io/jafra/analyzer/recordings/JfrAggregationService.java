@@ -2,7 +2,6 @@ package io.jafra.analyzer.recordings;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,13 +26,6 @@ public class JfrAggregationService {
 
     private static final Set<String> KINDS = Set.of(
             "gc-pauses", "trends", "allocations", "samples", "contention", "exceptions");
-
-    private static final List<String> GC_PAUSE_TYPES = List.of(
-            "jdk.GCPhasePause",
-            "jdk.GCPhasePauseLevel1",
-            "jdk.GCPhasePauseLevel2",
-            "jdk.GCPhasePauseLevel3",
-            "jdk.GCPhasePauseLevel4");
 
     private static final List<String> YOUNG_GC_TYPES = List.of("jdk.YoungGarbageCollection", "jdk.G1GarbageCollection");
 
@@ -78,15 +70,16 @@ public class JfrAggregationService {
     private AggregationDocument gcPauses(
             RecordingCatalog.WindowSelection selection, IItemCollection events, Set<String> available) {
         List<Long> pauseNs = new ArrayList<>();
-        for (String typeId : present(GC_PAUSE_TYPES, available)) {
-            collectPauseDurations(events, typeId, pauseNs);
+        for (String typeId : JfrAnalyticsSupport.present(JfrAnalyticsSupport.GC_PAUSE_TYPES, available)) {
+            JfrAnalyticsSupport.collectPauseDurations(events, typeId, pauseNs);
         }
         long youngGcCount = 0L;
         for (String typeId : present(YOUNG_GC_TYPES, available)) {
-            youngGcCount += countEvents(events, typeId);
+            youngGcCount += JfrAnalyticsSupport.countEvents(events, typeId);
         }
-        Map<String, Object> stats = pauseStats(pauseNs);
+        Map<String, Object> stats = JfrAnalyticsSupport.pauseStats(pauseNs);
         stats.put("youngGcCount", youngGcCount);
+        stats.put("phaseBreakdown", JfrAnalyticsSupport.gcPhaseBreakdown(events, available));
         return new AggregationDocument(AnalysisEnvelope.from(selection), "gc-pauses", stats, List.of(), List.of());
     }
 
@@ -251,27 +244,6 @@ public class JfrAggregationService {
         return types;
     }
 
-    private static void collectPauseDurations(IItemCollection events, String typeId, List<Long> pauseNs) {
-        for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
-            for (IItem item : iterable) {
-                Long duration = JfrItemAccess.durationNs(item);
-                if (duration != null && duration > 0) {
-                    pauseNs.add(duration);
-                }
-            }
-        }
-    }
-
-    private static long countEvents(IItemCollection events, String typeId) {
-        long count = 0L;
-        for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
-            for (IItem ignored : iterable) {
-                count++;
-            }
-        }
-        return count;
-    }
-
     private static TrendSeries trendSeries(IItemCollection events, String typeId, String field) {
         List<TrendPoint> points = new ArrayList<>();
         for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
@@ -312,30 +284,6 @@ public class JfrAggregationService {
         }
         double slopePerSecond = (n * sumXY - sumX * sumY) / denom;
         return slopePerSecond * 3600.0;
-    }
-
-    private static Map<String, Object> pauseStats(List<Long> pauseNs) {
-        Map<String, Object> stats = new LinkedHashMap<>();
-        if (pauseNs.isEmpty()) {
-            stats.put("count", 0L);
-            stats.put("sumMs", 0.0);
-            stats.put("maxMs", 0.0);
-            stats.put("p99Ms", 0.0);
-            return stats;
-        }
-        List<Long> sorted = new ArrayList<>(pauseNs);
-        Collections.sort(sorted);
-        long sum = 0L;
-        for (long value : sorted) {
-            sum += value;
-        }
-        long max = sorted.getLast();
-        int p99Index = Math.min(sorted.size() - 1, (int) Math.ceil(sorted.size() * 0.99) - 1);
-        stats.put("count", (long) sorted.size());
-        stats.put("sumMs", sum / 1_000_000.0);
-        stats.put("maxMs", max / 1_000_000.0);
-        stats.put("p99Ms", sorted.get(Math.max(0, p99Index)) / 1_000_000.0);
-        return stats;
     }
 
     private static List<String> present(List<String> candidates, Set<String> available) {

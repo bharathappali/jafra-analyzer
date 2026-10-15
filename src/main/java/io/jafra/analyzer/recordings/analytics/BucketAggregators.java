@@ -95,15 +95,51 @@ public final class BucketAggregators {
     }
 
     public static void addDurationMs(
-            TimeBucketGrid grid, int[] counts, double[] sumMs, double[] maxMs, long timeNs, double durationMs) {
-        int idx = grid.indexFor(timeNs);
-        if (idx < 0) {
+            TimeBucketGrid grid, int[] counts, double[] sumMs, double[] maxMs, long startNs, double durationMs) {
+        if (durationMs <= 0.0 || grid.bucketCount() == 0) {
             return;
         }
-        counts[idx]++;
-        sumMs[idx] += durationMs;
-        if (Double.isNaN(maxMs[idx]) || durationMs > maxMs[idx]) {
-            maxMs[idx] = durationMs;
+        long durationNs = Math.round(durationMs * 1_000_000.0);
+        if (durationNs <= 0L) {
+            return;
+        }
+        long endNs = startNs + durationNs;
+        long windowFrom = grid.fromEpochNs();
+        long windowTo = grid.toEpochNs();
+        long overlapStart = Math.max(startNs, windowFrom);
+        long overlapEnd = Math.min(endNs, windowTo);
+        if (overlapEnd <= overlapStart) {
+            return;
+        }
+        int first = grid.indexFor(overlapStart);
+        int last = grid.indexFor(overlapEnd - 1L);
+        if (first < 0 || last < 0) {
+            return;
+        }
+        for (int idx = first; idx <= last; idx++) {
+            long bucketStart = grid.bucketStartNs(idx);
+            long bucketEnd = grid.bucketEndNs(idx);
+            long lo = Math.max(startNs, bucketStart);
+            long hi = Math.min(endNs, bucketEnd);
+            if (hi <= lo) {
+                continue;
+            }
+            double portionMs = (hi - lo) / 1_000_000.0;
+            sumMs[idx] += portionMs;
+            if (Double.isNaN(maxMs[idx]) || portionMs > maxMs[idx]) {
+                maxMs[idx] = portionMs;
+            }
+        }
+        int countIdx;
+        if (startNs >= windowFrom && startNs < windowTo) {
+            countIdx = grid.indexFor(startNs);
+        } else if (startNs < windowFrom) {
+            countIdx = grid.indexFor(windowFrom);
+        } else {
+            countIdx = -1;
+        }
+        if (countIdx >= 0) {
+            counts[countIdx]++;
         }
     }
 

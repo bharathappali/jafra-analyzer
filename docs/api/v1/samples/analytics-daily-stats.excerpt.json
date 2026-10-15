@@ -193,23 +193,53 @@
         "status": "present",
         "eventTypesExpected": [
           "jdk.FileRead",
+          "jdk.FileWrite",
           "jdk.SocketRead",
+          "jdk.SocketWrite",
           "jdk.ContainerIOUsage"
         ],
         "eventTypesSeen": [
           "jdk.FileRead",
+          "jdk.FileWrite",
           "jdk.SocketRead",
+          "jdk.SocketWrite",
           "jdk.ContainerIOUsage"
         ]
       },
       "rollup": {
-        "ioOperationCount": 1,
-        "ioDurationSumMs": 305.084151,
+        "fileRead": {
+          "count": 1,
+          "bytesRead": 14,
+          "p50Ms": 305.084151,
+          "p99Ms": 305.084151,
+          "maxMs": 305.084151
+        },
+        "fileWrite": {
+          "count": 0,
+          "bytesWritten": 0
+        },
+        "socketRead": {
+          "count": 0,
+          "bytesRead": 0
+        },
+        "socketWrite": {
+          "count": 0,
+          "bytesWritten": 0
+        },
+        "topTargets": [
+          {
+            "kind": "fileRead",
+            "target": "/sys/fs/cgroup/cpu.max",
+            "count": 1,
+            "totalMs": 305.084151,
+            "bytes": 14
+          }
+        ],
         "containerIoBytesDelta": 886294016
       },
       "evidence": {},
       "notes": [
-        "Sparse IO events are common; correlate slow reads with wall_time."
+        "File and socket reads and writes are counted separately."
       ]
     },
     "heap": {

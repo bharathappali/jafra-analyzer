@@ -190,7 +190,7 @@ No `series` in v1 (rates are in rollup).
 
 ### `gc`
 
-**Rollup (60 s):** same pause stats as [aggregation-gc-pauses.json](samples/aggregation-gc-pauses.json) plus `youngGcPerHour`, `pauseTimePercentOfWindow`, `p50Ms`/`p95Ms`
+**Rollup:** same pause stats as [aggregation-gc-pauses.json](samples/aggregation-gc-pauses.json) (`count` 5 on the golden window) plus `youngGcPerHour`, `pauseTimePercentOfWindow`, `p50Ms`/`p90Ms`/`p95Ms`/`p99Ms`, and `phaseBreakdown` for level events only
 
 **Series:** `pauseSumMsPerBucket`, `youngGcCountPerBucket`
 
@@ -216,9 +216,9 @@ No `series` in v1 (rates are in rollup).
 
 ### `io`
 
-**Rollup:** `ioOperationCount`, `ioDurationSumMs`, optional `containerIoBytesDelta`
+**Rollup:** `fileRead`, `fileWrite`, `socketRead`, `socketWrite` (each `count`, `bytesRead` or `bytesWritten`, `p50Ms`/`p99Ms`/`maxMs`), `topTargets` (`host:port` or `path`), optional `containerIoBytesDelta`
 
-**Fixture:** one `jdk.FileRead` in full window — often low counts
+**Fixture:** one `jdk.FileRead` in the full window — often low counts
 
 ### `container`
 
@@ -262,7 +262,7 @@ Each key returns `status: ok` or `insufficient_data`.
 | Key | Golden fixture output (when data exists) |
 |-----|------------------------------------------|
 | `cpuVsWall` | `offCpuFractionEstimatePercent`, `stacksWallOnly`, `stacksCpuOnly`, `stacksShared` |
-| `heapVsRss` | `heapUsedSlopePerHour`, `heapVsRssGapMeanBytes` |
+| `heapVsRss` | `heapUsedSlopePerHour`, `rssSlopePerHour`, `divergencePerHour`, `heapVsRssGapMeanBytes` |
 | `stackIntersections` | `cpuWallAlloc` stack keys |
 | `compileVsNativeMalloc` | compilation vs malloc totals |
 | `allocVsGc`, `jvmVsMachineCpu`, … | `status: ok` with note to use subsystem rollups |

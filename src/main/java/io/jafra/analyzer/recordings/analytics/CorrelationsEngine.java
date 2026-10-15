@@ -79,7 +79,8 @@ public class CorrelationsEngine {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "ok");
         result.put("heapUsedSlopePerHour", heap.rollup().get("heapUsedSlopePerHour"));
-        result.put("rssSlopeProxy", heap.rollup().get("heapUsedSlopePerHour"));
+        result.put("rssSlopePerHour", heap.rollup().get("rssSlopePerHour"));
+        result.put("divergencePerHour", heap.rollup().get("divergencePerHour"));
         result.put("heapVsRssGapMeanBytes", heap.rollup().get("heapVsRssGapMeanBytes"));
         result.put("divergenceNote", "Positive gap with rising RSS and flat heap suggests native/off-heap growth.");
         return result;

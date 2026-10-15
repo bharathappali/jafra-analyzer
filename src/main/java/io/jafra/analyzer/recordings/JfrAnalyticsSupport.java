@@ -1,7 +1,6 @@
 package io.jafra.analyzer.recordings;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,13 +13,16 @@ import org.openjdk.jmc.common.item.IItemIterable;
 import org.openjdk.jmc.common.item.ItemFilters;
 
 import io.jafra.analyzer.recordings.analytics.AnalyticsModels;
+import io.jafra.analyzer.recordings.stats.Percentiles;
 
 /** Shared JFR analytics helpers for aggregation and analytics APIs. */
 public final class JfrAnalyticsSupport {
     public static final long CONTENTION_MIN_NS = 20_000_000L;
 
-    public static final List<String> GC_PAUSE_TYPES = List.of(
-            "jdk.GCPhasePause",
+    /** Top-level pauses only. Level events are nested sub-phases and must not enter pause totals. */
+    public static final List<String> GC_PAUSE_TYPES = List.of("jdk.GCPhasePause");
+
+    public static final List<String> GC_PHASE_LEVEL_TYPES = List.of(
             "jdk.GCPhasePauseLevel1",
             "jdk.GCPhasePauseLevel2",
             "jdk.GCPhasePauseLevel3",
@@ -93,31 +95,82 @@ public final class JfrAnalyticsSupport {
             stats.put("sumMs", 0.0);
             stats.put("maxMs", 0.0);
             stats.put("p50Ms", 0.0);
+            stats.put("p90Ms", 0.0);
             stats.put("p95Ms", 0.0);
             stats.put("p99Ms", 0.0);
             return stats;
         }
-        List<Long> sorted = new ArrayList<>(pauseNs);
-        Collections.sort(sorted);
         long sum = 0L;
-        for (long value : sorted) {
+        List<Double> pauseMs = new ArrayList<>(pauseNs.size());
+        for (long value : pauseNs) {
             sum += value;
+            pauseMs.add(value / 1_000_000.0);
         }
-        stats.put("count", (long) sorted.size());
+        Percentiles.Summary summary = Percentiles.summarize(pauseMs).orElseThrow();
+        stats.put("count", (long) pauseNs.size());
         stats.put("sumMs", sum / 1_000_000.0);
-        stats.put("maxMs", sorted.getLast() / 1_000_000.0);
-        stats.put("p50Ms", percentileMs(sorted, 0.50));
-        stats.put("p95Ms", percentileMs(sorted, 0.95));
-        stats.put("p99Ms", percentileMs(sorted, 0.99));
+        stats.put("maxMs", summary.max());
+        stats.put("p50Ms", summary.p50());
+        stats.put("p90Ms", summary.p90());
+        stats.put("p95Ms", summary.p95());
+        stats.put("p99Ms", summary.p99());
         return stats;
     }
 
-    public static double percentileMs(List<Long> sortedNs, double quantile) {
-        if (sortedNs.isEmpty()) {
-            return 0.0;
+    /**
+     * Level1–4 phase events grouped by phase name. These rows are a breakdown only and are excluded
+     * from {@link #pauseStats}.
+     */
+    public static List<Map<String, Object>> gcPhaseBreakdown(IItemCollection events, Set<String> available) {
+        Map<String, PhaseAccumulator> byKey = new LinkedHashMap<>();
+        for (String typeId : present(GC_PHASE_LEVEL_TYPES, available)) {
+            int level = phaseLevel(typeId);
+            for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
+                for (IItem item : iterable) {
+                    Long duration = JfrItemAccess.durationNs(item);
+                    if (duration == null || duration <= 0) {
+                        continue;
+                    }
+                    String rawName = JfrItemAccess.text(item, "name");
+                    String phaseName = rawName == null || rawName.isBlank() ? typeId : rawName;
+                    String key = level + "\0" + phaseName;
+                    PhaseAccumulator acc =
+                            byKey.computeIfAbsent(key, ignored -> new PhaseAccumulator(phaseName, level));
+                    acc.count++;
+                    acc.sumNs += duration;
+                    if (duration > acc.maxNs) {
+                        acc.maxNs = duration;
+                    }
+                }
+            }
         }
-        int index = Math.min(sortedNs.size() - 1, (int) Math.ceil(sortedNs.size() * quantile) - 1);
-        return sortedNs.get(Math.max(0, index)) / 1_000_000.0;
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (PhaseAccumulator acc : byKey.values()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", acc.name);
+            row.put("level", acc.level);
+            row.put("count", acc.count);
+            row.put("sumMs", acc.sumNs / 1_000_000.0);
+            row.put("maxMs", acc.maxNs / 1_000_000.0);
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private static int phaseLevel(String typeId) {
+        if (typeId.endsWith("Level1")) {
+            return 1;
+        }
+        if (typeId.endsWith("Level2")) {
+            return 2;
+        }
+        if (typeId.endsWith("Level3")) {
+            return 3;
+        }
+        if (typeId.endsWith("Level4")) {
+            return 4;
+        }
+        return 0;
     }
 
     public static long countEvents(IItemCollection events, String typeId) {
@@ -214,14 +267,15 @@ public final class JfrAnalyticsSupport {
             min = Math.min(min, v);
             max = Math.max(max, v);
         }
-        List<Double> sorted = new ArrayList<>(values);
-        Collections.sort(sorted);
+        Percentiles.Summary summary = Percentiles.summarize(values).orElseThrow();
         map.put("count", (long) values.size());
         map.put("mean", sum / values.size());
         map.put("min", min);
-        map.put("max", max);
-        map.put("p50", sorted.get(sorted.size() / 2));
-        map.put("p95", sorted.get(Math.min(sorted.size() - 1, (int) (sorted.size() * 0.95))));
+        map.put("max", summary.max());
+        map.put("p50", summary.p50());
+        map.put("p90", summary.p90());
+        map.put("p95", summary.p95());
+        map.put("p99", summary.p99());
         return map;
     }
 
@@ -257,6 +311,19 @@ public final class JfrAnalyticsSupport {
 
         JfrAggregationService.RankedEntry toEntry() {
             return new JfrAggregationService.RankedEntry(group, key, stack, count, bytes, totalNs);
+        }
+    }
+
+    private static final class PhaseAccumulator {
+        final String name;
+        final int level;
+        long count;
+        long sumNs;
+        long maxNs;
+
+        PhaseAccumulator(String name, int level) {
+            this.name = name;
+            this.level = level;
         }
     }
 }

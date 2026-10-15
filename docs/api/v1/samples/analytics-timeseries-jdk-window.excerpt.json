@@ -296,15 +296,16 @@
         ]
       },
       "rollup": {
-        "count": 34,
-        "sumMs": 1943.865125,
+        "count": 5,
+        "sumMs": 1000.908156,
         "maxMs": 494.561566,
-        "p50Ms": 0.629084,
-        "p95Ms": 444.132858,
+        "p50Ms": 104.062695,
+        "p90Ms": 494.561566,
+        "p95Ms": 494.561566,
         "p99Ms": 494.561566,
         "youngGcCount": 2,
         "youngGcPerHour": 0.041666666666666664,
-        "pauseTimePercentOfWindow": 0.001124921947337963
+        "pauseTimePercentOfWindow": 0.0005792292569444445
       },
       "series": [
         {
@@ -356,9 +357,9 @@
             "type": "jdk.GCPhasePause"
           },
           {
-            "at": "2026-09-13T09:49:20.995555204Z",
-            "durationMs": 444.132858,
-            "type": "jdk.GCPhasePauseLevel1"
+            "at": "2026-09-12T17:26:35.246919507Z",
+            "durationMs": 304.527317,
+            "type": "jdk.GCPhasePause"
           }
         ]
       },
@@ -374,7 +375,8 @@
     "heapVsRss": {
       "status": "ok",
       "heapUsedSlopePerHour": -6991880.502758047,
-      "rssSlopeProxy": -6991880.502758047,
+      "rssSlopePerHour": 355731.83928134275,
+      "divergencePerHour": 7347612.34203939,
       "heapVsRssGapMeanBytes": 390298259.2,
       "divergenceNote": "Positive gap with rising RSS and flat heap suggests native/off-heap growth."
     },

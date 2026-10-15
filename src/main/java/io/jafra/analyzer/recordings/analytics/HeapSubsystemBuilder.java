@@ -37,6 +37,7 @@ final class HeapSubsystemBuilder extends AnalyticsSubsystemSupport {
         }
         List<long[]> heapPoints = new ArrayList<>();
         List<long[]> metaPoints = new ArrayList<>();
+        List<long[]> rssPoints = new ArrayList<>();
         List<Double> rss = new ArrayList<>();
         List<Double> heapUsed = new ArrayList<>();
         List<AnalyticsModels.MetricSeries> series = new ArrayList<>();
@@ -82,6 +83,7 @@ final class HeapSubsystemBuilder extends AnalyticsSubsystemSupport {
                     long size = readQuantityBytes(item, "size");
                     if (size > 0) {
                         rss.add((double) size);
+                        rssPoints.add(new long[] {t, size});
                         if (rssCounts != null) {
                             BucketAggregators.addGauge(grid, rssCounts, rssSum, rssLast, t, size);
                         }
@@ -106,8 +108,17 @@ final class HeapSubsystemBuilder extends AnalyticsSubsystemSupport {
         Map<String, Object> rollup = new LinkedHashMap<>();
         rollup.put("heapUsed", JfrAnalyticsSupport.numericSummary(heapUsed));
         rollup.put("rss", JfrAnalyticsSupport.numericSummary(rss));
-        rollup.put("heapUsedSlopePerHour", JfrAnalyticsSupport.linearSlopePerHour(heapPoints));
+        double heapSlope = JfrAnalyticsSupport.linearSlopePerHour(heapPoints);
+        rollup.put("heapUsedSlopePerHour", heapSlope);
         rollup.put("metaspaceUsedSlopePerHour", JfrAnalyticsSupport.linearSlopePerHour(metaPoints));
+        if (rssPoints.isEmpty()) {
+            rollup.put("rssSlopePerHour", unavailableRss());
+            rollup.put("divergencePerHour", unavailableRss());
+        } else {
+            double rssSlope = JfrAnalyticsSupport.linearSlopePerHour(rssPoints);
+            rollup.put("rssSlopePerHour", rssSlope);
+            rollup.put("divergencePerHour", rssSlope - heapSlope);
+        }
         double meanHeap = heapUsed.isEmpty() ? 0.0 : heapUsed.stream().mapToDouble(Double::doubleValue).average().orElse(0);
         double meanRss = rss.isEmpty() ? 0.0 : rss.stream().mapToDouble(Double::doubleValue).average().orElse(0);
         rollup.put("heapVsRssGapMeanBytes", meanRss - meanHeap);
@@ -118,5 +129,14 @@ final class HeapSubsystemBuilder extends AnalyticsSubsystemSupport {
                 seriesOrNull(timeseries(params), series),
                 Map.of(),
                 List.of("Use with native_memory when RSS diverges from heap."));
+    }
+
+    private static Map<String, Object> unavailableRss() {
+        Map<String, Object> unavailable = new LinkedHashMap<>();
+        unavailable.put("status", "unavailable");
+        unavailable.put("reason", "jdk_version");
+        unavailable.put("min_jdk", 21);
+        unavailable.put("hint", "Upgrade to JDK 21+ to see this (jdk.ResidentSetSize).");
+        return unavailable;
     }
 }

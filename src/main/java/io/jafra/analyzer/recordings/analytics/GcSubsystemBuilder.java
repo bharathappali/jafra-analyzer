@@ -35,9 +35,6 @@ final class GcSubsystemBuilder extends AnalyticsSubsystemSupport {
         for (String typeId : JfrAnalyticsSupport.present(JfrAnalyticsSupport.GC_PAUSE_TYPES, available)) {
             JfrAnalyticsSupport.collectPauseDurations(events, typeId, pauseNs);
         }
-        if (pauseNs.isEmpty() && !JfrAnalyticsSupport.present(JfrAnalyticsSupport.GC_PAUSE_TYPES, available).isEmpty()) {
-            // partial only pause levels
-        }
         if (pauseNs.isEmpty() && availability.status().equals(AnalyticsModels.AVAIL_ABSENT)) {
             return absent(id(), EXPECTED);
         }
@@ -51,6 +48,7 @@ final class GcSubsystemBuilder extends AnalyticsSubsystemSupport {
         rollup.put("youngGcPerHour", youngGc / windowSec * 3600.0);
         double pauseMs = ((Number) rollup.getOrDefault("sumMs", 0.0)).doubleValue();
         rollup.put("pauseTimePercentOfWindow", windowSec <= 0 ? 0.0 : 100.0 * pauseMs / 1000.0 / windowSec);
+        rollup.put("phaseBreakdown", JfrAnalyticsSupport.gcPhaseBreakdown(events, available));
         List<AnalyticsModels.MetricSeries> series = new ArrayList<>();
         List<Map<String, Object>> longest = new ArrayList<>();
         if (timeseries(params) && grid != null) {

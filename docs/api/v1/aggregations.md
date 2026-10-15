@@ -20,16 +20,19 @@ Shared response fields: `context` (envelope), `kind`, `stats`, optional `trends`
 {
   "kind": "gc-pauses",
   "stats": {
-    "count": 34,
-    "sumMs": 1943.865125,
+    "count": 5,
+    "sumMs": 1000.908156,
     "maxMs": 494.561566,
+    "p50Ms": 104.062695,
+    "p90Ms": 494.561566,
+    "p95Ms": 494.561566,
     "p99Ms": 494.561566,
     "youngGcCount": 2
   }
 }
 ```
 
-Uses `jdk.GCPhasePause*` and young GC event counts when present.
+Pause count, sum, max, and percentiles use only `jdk.GCPhasePause`. Nested `jdk.GCPhasePauseLevel1`–`4` events are returned separately as `stats.phaseBreakdown` (`name`, `level`, `count`, `sumMs`, `maxMs`) and are not added into the pause totals. `youngGcCount` still counts young GC events.
 
 ## `trends`
 
