@@ -18,9 +18,10 @@ import io.jafra.analyzer.findings.FindingDetectors;
 import io.jafra.analyzer.findings.WindowSnapshot;
 import io.jafra.analyzer.ingest.decode.ParquetTables;
 import io.jafra.analyzer.metrics.MetricRegistry;
+import io.jafra.analyzer.recordings.stats.Pearson;
 import io.jafra.analyzer.signals.SignalRegistry;
 
-/** Reads the v2 Parquet tables. Heap generations stay empty until the heap feed. */
+/** Reads the v2 Parquet tables. */
 public final class V2ReadService {
     private static final long LIVE_NS = 120_000_000_000L;
     private static final List<String> OVERVIEW = List.of(
@@ -117,14 +118,19 @@ public final class V2ReadService {
 
     public Map<String, Object> series(Identity id, V2Window.Range range, String requestedStep, String metrics, boolean compact)
             throws SQLException {
+        return series(id, range, requestedStep, metrics, compact, 240);
+    }
+
+    public Map<String, Object> series(Identity id, V2Window.Range range, String requestedStep, String metrics, boolean compact,
+            int maxPoints) throws SQLException {
         List<MetricRef> refs = metrics(metrics);
         String nativePeriod = coarsestNative(refs);
-        V2Window.StepChoice choice = V2Window.resolveStep(requestedStep, range, nativePeriod);
+        V2Window.StepChoice choice = V2Window.resolveStep(requestedStep, range, nativePeriod, maxPoints);
         long start = Math.floorDiv(range.fromNs(), choice.step().nanos) * choice.step().nanos;
         long end = range.toNs();
         List<Long> offsets = new ArrayList<>();
         List<Long> buckets = new ArrayList<>();
-        for (long bucket = start; bucket < end && offsets.size() < 240; bucket += choice.step().nanos) {
+        for (long bucket = start; bucket < end && offsets.size() < maxPoints; bucket += choice.step().nanos) {
             buckets.add(bucket);
             offsets.add((bucket - start) / 1_000_000_000L);
         }
@@ -395,6 +401,54 @@ public final class V2ReadService {
         return response;
     }
 
+    public Map<String, Object> correlate(Identity id, V2Window.Range range, String a, String b) throws SQLException {
+        List<MetricRef> leftRef = metrics(a);
+        List<MetricRef> rightRef = metrics(b);
+        if (leftRef.size() != 1 || rightRef.size() != 1) {
+            throw new IllegalArgumentException("correlate takes one metric on each side");
+        }
+        TreeMap<Long, Double> left = rollup(id, V2Window.Step.M1, leftRef.get(0), range.fromNs(), range.toNs());
+        TreeMap<Long, Double> right = rollup(id, V2Window.Step.M1, rightRef.get(0), range.fromNs(), range.toNs());
+        Map<String, Object> response = identity(id);
+        response.put("a", a);
+        response.put("b", b);
+        if (left.isEmpty() && right.isEmpty()) {
+            unavailable(response, id, leftRef.get(0).id());
+            return response;
+        }
+        java.util.TreeSet<Long> keys = new java.util.TreeSet<>();
+        keys.addAll(left.keySet());
+        keys.addAll(right.keySet());
+        List<Double> xs = new ArrayList<>();
+        List<Double> ys = new ArrayList<>();
+        for (Long key : keys) {
+            xs.add(left.get(key));
+            ys.add(right.get(key));
+        }
+        Map<String, Object> stats = Pearson.bestLag(xs, ys);
+        response.put("status", stats.get("status"));
+        response.put("n", stats.get("n"));
+        if (stats.get("r") instanceof Number r) {
+            response.put("r", CompactNumbers.round(r.doubleValue(), true));
+            response.put("lag", stats.get("lagBuckets"));
+        }
+        return response;
+    }
+
+    private void unavailable(Map<String, Object> response, Identity id, String metric) throws SQLException {
+        ReadSignal signal = signalState(id).get(SignalRegistry.get().metricSignal(metric));
+        if (signal != null && "unavailable".equals(signal.status())) {
+            response.put("status", "unavailable");
+            put(response, "reason", signal.reason());
+            if (signal.minJdk() != null) {
+                response.put("min_jdk", signal.minJdk());
+            }
+            put(response, "hint", signal.hint());
+            return;
+        }
+        response.put("status", "no_data_in_window");
+    }
+
     public Map<String, Object> overview(Identity id, V2Window.Range range, boolean compact) throws SQLException {
         Map<String, ReadSignal> signals = signalState(id);
         List<String> codes = findings(id);
@@ -520,6 +574,63 @@ public final class V2ReadService {
             body.put("frames", frames);
         }
         return body;
+    }
+
+    public Map<String, Object> heapSummary(Identity id, V2Window.Range range) throws SQLException {
+        Map<String, Object> response = identity(id);
+        String glob = glob("heap_gc", id);
+        if (glob == null) {
+            response.put("status", "no_data_in_window");
+            return response;
+        }
+        String sql = "SELECT kind, t, heap_after, promoted_bytes FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
+                + " ORDER BY t";
+        Map<String, Long> counts = new LinkedHashMap<>();
+        Double first = null;
+        Double last = null;
+        long firstT = 0L;
+        long lastT = 0L;
+        double promoted = 0.0;
+        int n = 0;
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                n++;
+                String kind = result.getString(1) == null ? "unknown" : result.getString(1);
+                counts.merge(kind, 1L, Long::sum);
+                if (result.getObject(3) != null) {
+                    double after = result.getDouble(3);
+                    if (first == null) {
+                        first = after;
+                        firstT = result.getLong(2);
+                    }
+                    last = after;
+                    lastT = result.getLong(2);
+                }
+                if (result.getObject(4) != null) {
+                    promoted += result.getDouble(4);
+                }
+            }
+        }
+        if (n == 0) {
+            response.put("status", "no_data_in_window");
+            return response;
+        }
+        response.put("status", "ok");
+        response.put("collections", n);
+        response.put("counts", counts);
+        if (first != null && last != null) {
+            response.put("floor_first", Math.round(first));
+            response.put("floor_last", Math.round(last));
+            double hours = (lastT - firstT) / 3_600_000_000_000.0;
+            if (hours > 0.0) {
+                response.put("floor_slope_per_h", CompactNumbers.round((last - first) / hours, true));
+            }
+        }
+        response.put("promoted_bytes", Math.round(promoted));
+        double seconds = Math.max(1.0, (range.toNs() - range.fromNs()) / 1_000_000_000.0);
+        response.put("promotion_per_s", CompactNumbers.round(promoted / seconds, true));
+        return response;
     }
 
     public Map<String, Object> findings(Identity id, V2Window.Range range) throws SQLException {

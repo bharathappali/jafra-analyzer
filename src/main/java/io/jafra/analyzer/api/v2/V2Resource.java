@@ -201,6 +201,24 @@ public class V2Resource {
     }
 
     @GET
+    @Path("correlate")
+    public Map<String, Object> correlate(
+            @QueryParam("ns") String ns,
+            @QueryParam("pod") String pod,
+            @QueryParam("container") String container,
+            @QueryParam("instance") String instance,
+            @QueryParam("last") String last,
+            @QueryParam("from") String from,
+            @QueryParam("to") String to,
+            @QueryParam("before") String before,
+            @QueryParam("after") String after,
+            @QueryParam("a") String a,
+            @QueryParam("b") String b) {
+        V2Window.Range range = window(last, from, to, before, after);
+        return call(() -> reads.correlate(identity(ns, pod, container, instance), range, a, b));
+    }
+
+    @GET
     @Path("overview")
     public Map<String, Object> overview(
             @QueryParam("ns") String ns,

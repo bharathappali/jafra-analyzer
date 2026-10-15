@@ -42,6 +42,8 @@ Decode runs on a pool of `jafra.decode.threads` (default 4). Catalog writes are 
 
 `GET /v2/findings` evaluates `signatures.yaml` on the requested window. The inputs are the 1 minute rollups, `heap_gc`, markers, and `top_1m`. A missing series does not fire its detector. `HEALTHY` is returned only when the window has data and nothing else fired. `ERGONOMIC_SERIAL_GC` is still the ingest `finding` row. Scenario JFR fixtures are not generated; `SignatureTest` runs only when `src/test/resources/jfr-fixtures/scenarios/` exists.
 
+`POST /mcp` calls these reads. `GET /v2/correlate` aligns two 1 minute series and returns the lagged Pearson result. MCP `heap_summary` aggregates `heap_gc` instead of listing every collection.
+
 ## Signals and container facts
 
 Each chunk also writes `signal` (one row per id in `signals.yaml`) and, when it applies, a `finding` row `ERGONOMIC_SERIAL_GC`. Container limits come from `jdk.ContainerConfiguration`: `cpu_limit_cores` is quota divided by the slice period (null when the quota is unlimited), `cpu_request_millicores_approx` rounds `cpuShares * 1000 / 1024` to the nearest 10, and cgroup v2 marks that request `approx_v2_weight_mapping`. Shares of 2 are `best_effort`. A negative memory limit is stored as null. `memory_request` is always `not_exposed_by_cgroup`.

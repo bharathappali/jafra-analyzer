@@ -10,6 +10,8 @@ The time window is `last` (default `15m`, wall clock ending now, max `7d`) or a 
 
 A series or overview block is `unavailable` when the JVM cannot produce that signal. The body then includes `reason` (`jdk_version`, `gc_type`, `jvm_flag`, `not_in_container`, `disabled_by_profiler`, `preset_threshold`, `not_exposed_by_cgroup`), `hint`, and `min_jdk` when the JDK is too old. A supported signal with no samples in the window is `no_data_in_window`. A supported signal that counted zero stays `ok` with zeros. `GET /v2/instance` returns the JVM facts, every signal verdict, and `ERGONOMIC_SERIAL_GC` when Serial was selected ergonomically on fewer than 2 CPUs or under 1792 MiB. `GET /v2/heap` returns one picture per collection. G1 uses `G1HeapSummary`, Parallel uses `PSHeapSummary`, and ZGC uses the young and old collection events. Serial uses `GCHeapSummary` plus `YoungGenerationConfiguration` and sets `estimated: true` on the young capacity. Region frames are counts by type when G1 region events exist. At most 500 collections are returned. Network stays `no_data_in_window`. `GET /v2/findings` runs the detectors in `signatures.yaml` on the 1 minute rollups, heap pictures, markers, and top keys in the window. An empty window is `no_data_in_window`. A window with data and no detector hit returns `HEALTHY`. Scenario fixtures are optional; the signature test stays disabled until `src/test/resources/jfr-fixtures/scenarios/` exists.
 
+`POST /mcp` speaks MCP JSON-RPC (`initialize`, `tools/list`, `tools/call`). Each tool is the matching `/v2` read in compact form. Every tool except `list_workloads` requires `workload.ns`, `workload.pod`, `workload.container`, and `workload.jvm_instance_id` (`latest` is allowed). `get_series` keeps at most 4 metrics and 120 points. `top` keeps `n` ≤ 15. `list_events` keeps `limit` ≤ 20. `get_stack` keeps `depth` ≤ 16. `heap_summary` returns GC counts, the after-GC floor, and the promotion rate. `get_correlation` is `GET /v2/correlate` and returns `r`, `lag`, and `n`. A missing required field is a tool error with `status: invalid_request`. An unavailable signal still carries `reason` and `hint`.
+
 | Endpoint | Reads |
 |----------|--------|
 | `GET /v2/workloads` | `jvm_instance` |
@@ -22,6 +24,8 @@ A series or overview block is `unavailable` when the JVM cannot produce that sig
 | `GET /v2/markers?kinds=&min_severity=` | `marker` |
 | `GET /v2/stacks/{id}?depth=` | `stack`, `frame` |
 | `GET /v2/compare?metrics=&compare_from=&compare_to=` | 1m rollups |
+| `GET /v2/correlate?a=&b=` | 1m rollups |
+| `POST /mcp` | the same reads, as MCP tools |
 | `GET /v2/overview` | 1m rollups |
 
 `/v2/top` returns `insufficient_samples` when the window has fewer than 300 samples. `ci95` is the normal 95% half-width of the share. More than 500 markers are clustered per minute (`count`, `max`) instead of listed. Event cursors are exclusive timestamps. `group=thread_group` and `kind=native` return `no_data_in_window` until those rankings are stored.

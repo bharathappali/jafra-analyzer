@@ -35,6 +35,10 @@ public final class V2Window {
     }
 
     public static StepChoice resolveStep(String requested, Range range, String nativePeriod) {
+        return resolveStep(requested, range, nativePeriod, 240);
+    }
+
+    public static StepChoice resolveStep(String requested, Range range, String nativePeriod, int maxPoints) {
         boolean auto = requested == null || requested.isBlank() || "auto".equals(requested);
         Step explicit = auto ? auto(range) : step(requested);
         Step step = explicit;
@@ -45,7 +49,7 @@ public final class V2Window {
             coarser = true;
         }
         long span = Math.max(1L, range.to().toEpochMilli() - range.from().toEpochMilli());
-        while (points(span, step) > 240 && step.ordinal() < Step.H1.ordinal()) {
+        while (points(span, step) > maxPoints && step.ordinal() < Step.H1.ordinal()) {
             step = Step.values()[step.ordinal() + 1];
             if (!auto) {
                 coarser = true;
