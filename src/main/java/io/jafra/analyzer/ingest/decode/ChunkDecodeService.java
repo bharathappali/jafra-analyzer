@@ -127,6 +127,7 @@ public final class ChunkDecodeService {
         rows += writeGauges(metadata, chunk, resolved.id);
         rows += writeCounters(metadata, chunk, resolved.id);
         rows += writeGc(metadata, chunk, resolved.id);
+        rows += writeHeap(metadata, chunk, resolved.id);
         rows += writePhases(metadata, chunk, resolved.id);
         rows += writeSamples(metadata, chunk, resolved.id);
         rows += writeDurations(metadata, chunk, resolved.id);
@@ -312,6 +313,53 @@ public final class ChunkDecodeService {
         }
         return emit(metadata, "gc", id, metadata.chunkStartTimeNs(),
                 List.of("gc_id", "name", "cause", "kind", "sum_pause_ms", "longest_pause_ms"), rows);
+    }
+
+    private long writeHeap(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, String id) throws Exception {
+        HeapFrames.Result result = HeapFrames.build(chunk);
+        List<List<Object>> rows = new ArrayList<>();
+        for (HeapFrames.Row collection : result.collections()) {
+            List<Object> row = identity(metadata, id, collection.t());
+            row.add(collection.gcId());
+            row.add(collection.name());
+            row.add(collection.cause());
+            row.add(collection.kind());
+            row.add(collection.collector());
+            row.add(collection.estimated());
+            row.add(collection.heapBefore());
+            row.add(collection.heapAfter());
+            row.add(collection.committed());
+            row.add(collection.edenBefore());
+            row.add(collection.edenAfter());
+            row.add(collection.survivorBefore());
+            row.add(collection.survivorAfter());
+            row.add(collection.oldBefore());
+            row.add(collection.oldAfter());
+            row.add(collection.youngCapacity());
+            row.add(collection.humongousRegions());
+            row.add(collection.promotedBytes());
+            row.add(collection.tenuring());
+            rows.add(row);
+        }
+        long written = emit(metadata, "heap_gc", id, metadata.chunkStartTimeNs(), List.of(
+                "gc_id", "name", "cause", "kind", "collector", "estimated",
+                "heap_before", "heap_after", "committed", "eden_before", "eden_after",
+                "survivor_before", "survivor_after", "old_before", "old_after", "young_capacity",
+                "humongous_regions", "promoted_bytes", "tenuring_threshold"), rows);
+        if (!result.regions().isEmpty()) {
+            List<List<Object>> frames = new ArrayList<>();
+            for (HeapFrames.RegionFrame frame : result.regions()) {
+                List<Object> row = identity(metadata, id, frame.t());
+                row.add(frame.gcId());
+                row.add(frame.type());
+                row.add(frame.count());
+                row.add(frame.used());
+                frames.add(row);
+            }
+            written += emit(metadata, "g1_region_frame", id, metadata.chunkStartTimeNs(),
+                    List.of("gc_id", "type", "region_count", "used"), frames);
+        }
+        return written;
     }
 
     private long writePhases(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, String id) throws Exception {

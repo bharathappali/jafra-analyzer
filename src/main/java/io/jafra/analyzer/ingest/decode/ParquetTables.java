@@ -78,10 +78,12 @@ public final class ParquetTables {
             case "t", "t_end", "start_t", "bucket_t", "jvm_start", "pid", "gc_id", "instance_seq", "level",
                     "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "jdk_feature",
                     "os_thread_id", "size", "bytes", "line", "depth", "safepoint_id", "n", "min_jdk",
-                    "cpu_request_millicores_approx" -> "BIGINT";
+                    "cpu_request_millicores_approx", "heap_before", "heap_after", "committed", "eden_before", "eden_after",
+                    "survivor_before", "survivor_after", "old_before", "old_after", "young_capacity", "humongous_regions",
+                    "promoted_bytes", "tenuring_threshold", "region_count", "used" -> "BIGINT";
             case "value", "dt_s", "delta", "sum_pause_ms", "longest_pause_ms", "dur_ms", "magnitude", "weight",
                     "sum", "min", "max", "p50", "p90", "p99", "last", "cpu_limit_cores" -> "DOUBLE";
-            case "provisional", "concurrent" -> "BOOLEAN";
+            case "provisional", "concurrent", "estimated" -> "BOOLEAN";
             default -> "VARCHAR";
         };
     }

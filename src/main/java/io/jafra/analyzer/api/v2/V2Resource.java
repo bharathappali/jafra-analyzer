@@ -33,6 +33,23 @@ public class V2Resource {
     }
 
     @GET
+    @Path("heap")
+    public Map<String, Object> heap(
+            @QueryParam("ns") String ns,
+            @QueryParam("pod") String pod,
+            @QueryParam("container") String container,
+            @QueryParam("instance") String instance,
+            @QueryParam("last") String last,
+            @QueryParam("from") String from,
+            @QueryParam("to") String to,
+            @QueryParam("before") String before,
+            @QueryParam("after") String after,
+            @QueryParam("format") @DefaultValue("compact") String format) {
+        V2Window.Range range = window(last, from, to, before, after);
+        return call(() -> reads.heap(identity(ns, pod, container, instance), range, compact(format)));
+    }
+
+    @GET
     @Path("instance")
     public Map<String, Object> instance(
             @QueryParam("ns") String ns,

@@ -15,6 +15,7 @@ import java.util.Set;
 import io.jafra.analyzer.signals.ContainerMath;
 
 import jdk.jfr.consumer.RecordedEvent;
+import jdk.jfr.consumer.RecordedObject;
 import jdk.jfr.consumer.RecordingFile;
 
 /** One pass over a committed chunk with the JDK flight recorder reader. */
@@ -58,7 +59,10 @@ public final class JfrChunkReader {
                 number(event, "jvmSystem").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "cpu.jvm_system", value)));
                 number(event, "machineTotal").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "cpu.machine_total", value)));
             }
-            case "jdk.GCHeapSummary" -> number(event, "heapUsed").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "heap.used", value)));
+            case "jdk.GCHeapSummary" -> {
+                number(event, "heapUsed").ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "heap.used", value)));
+                chunk.heapSummaries.add(heapSummary(event));
+            }
             case "jdk.ResidentSetSize" -> firstNumber(event, "size", "residentSet", "rss")
                     .ifPresent(value -> chunk.gauges.add(new GaugePoint(t, "rss", value)));
             case "jdk.ContainerMemoryUsage" -> number(event, "memoryUsage")
@@ -79,6 +83,17 @@ public final class JfrChunkReader {
                 cumulative(chunk, t, "classes.unloaded", event, "unloadedClassCount");
             }
             case "jdk.GarbageCollection" -> chunk.gcs.add(gc(event, t));
+            case "jdk.G1HeapSummary" -> chunk.generations.add(generation(event, "g1"));
+            case "jdk.PSHeapSummary" -> chunk.generations.add(generation(event, "parallel"));
+            case "jdk.YoungGenerationConfiguration" -> chunk.newRatio = longValue(event, "newRatio");
+            case "jdk.YoungGarbageCollection" -> chunk.youngGcs.add(
+                    new HeapFrames.YoungGc(longValue(event, "gcId"), integer(event, "tenuringThreshold")));
+            case "jdk.ZYoungGarbageCollection" -> chunk.zCollections.add(new HeapFrames.ZCollection(t, longValue(event, "gcId"), "z_young"));
+            case "jdk.ZOldGarbageCollection" -> chunk.zCollections.add(new HeapFrames.ZCollection(t, longValue(event, "gcId"), "z_old"));
+            case "jdk.G1HeapRegionTypeChange" -> chunk.regions.add(
+                    new HeapFrames.RegionEvent(t, longValue(event, "gcId"), text(event, "to", "type"), usedBytes(event)));
+            case "jdk.G1HeapRegionInformation" -> chunk.regions.add(
+                    new HeapFrames.RegionEvent(t, longValue(event, "gcId"), text(event, "type"), usedBytes(event)));
             case "jdk.GCPhasePause", "jdk.GCPhasePauseLevel1", "jdk.GCPhasePauseLevel2", "jdk.GCPhasePauseLevel3",
                     "jdk.GCPhasePauseLevel4" -> chunk.phases.add(phase(event, t, type));
             case "jdk.Shutdown" -> chunk.shutdownReason = text(event, "reason");
@@ -123,6 +138,87 @@ public final class JfrChunkReader {
 
     private static SettingRow setting(RecordedEvent event, long t) {
         return new SettingRow(t, text(event, "id", "name"), text(event, "setting", "name"), text(event, "value"));
+    }
+
+    private static HeapFrames.HeapSummary heapSummary(RecordedEvent event) {
+        return new HeapFrames.HeapSummary(
+                longValue(event, "gcId"), before(event), longValue(event, "heapUsed"), committed(event));
+    }
+
+    private static HeapFrames.GenerationSummary generation(RecordedEvent event, String source) {
+        Long eden = firstLong(event, "edenUsedSize", "edenUsed");
+        Long survivor = firstLong(event, "survivorUsedSize", "survivorUsed");
+        if (survivor == null) {
+            Long from = firstLong(event, "fromUsed", "fromSpace");
+            Long to = firstLong(event, "toUsed", "toSpace");
+            if (from != null || to != null) {
+                survivor = (from == null ? 0L : from) + (to == null ? 0L : to);
+            }
+        }
+        Long old = firstLong(event, "oldUsedSize", "oldUsed", "oldGenUsedSize");
+        return new HeapFrames.GenerationSummary(longValue(event, "gcId"), before(event), source, eden, survivor, old);
+    }
+
+    private static boolean before(RecordedEvent event) {
+        String when = text(event, "when");
+        return when == null || when.toLowerCase(Locale.ROOT).contains("before");
+    }
+
+    private static Long committed(RecordedEvent event) {
+        if (!event.hasField("heapSpace")) {
+            return firstLong(event, "committedSize", "committed");
+        }
+        Object space = event.getValue("heapSpace");
+        if (space instanceof RecordedObject object) {
+            return firstLong(object, "committedSize", "committed");
+        }
+        return null;
+    }
+
+    private static long usedBytes(RecordedEvent event) {
+        Long used = firstLong(event, "used");
+        return used == null ? 0L : used;
+    }
+
+    private static Long firstLong(RecordedEvent event, String... fields) {
+        for (String field : fields) {
+            if (!event.hasField(field)) {
+                continue;
+            }
+            Long value = asLong(event.getValue(field));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static Long firstLong(RecordedObject object, String... fields) {
+        for (String field : fields) {
+            if (!object.hasField(field)) {
+                continue;
+            }
+            Long value = asLong(object.getValue(field));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static Long asLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof RecordedObject object) {
+            return firstLong(object, "used", "usedSize");
+        }
+        return null;
+    }
+
+    private static Integer integer(RecordedEvent event, String field) {
+        Long value = longValue(event, field);
+        return value == null ? null : value.intValue();
     }
 
     private static GcRow gc(RecordedEvent event, long t) {
@@ -262,6 +358,12 @@ public final class JfrChunkReader {
         final List<CounterSample> counters = new ArrayList<>();
         final List<GcRow> gcs = new ArrayList<>();
         final List<GcPhaseRow> phases = new ArrayList<>();
+        final List<HeapFrames.HeapSummary> heapSummaries = new ArrayList<>();
+        final List<HeapFrames.GenerationSummary> generations = new ArrayList<>();
+        final List<HeapFrames.YoungGc> youngGcs = new ArrayList<>();
+        final List<HeapFrames.ZCollection> zCollections = new ArrayList<>();
+        final List<HeapFrames.RegionEvent> regions = new ArrayList<>();
+        Long newRatio;
         final List<SampleRow> samples = new ArrayList<>();
         final List<DurationRow> durations = new ArrayList<>();
         final List<SignalEvent> signals = new ArrayList<>();

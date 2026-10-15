@@ -69,6 +69,8 @@ class ChunkDecodeGoldenTest {
             assertTrue(countParquet(v2.resolve("rollup_1m")) > 0L);
             assertTrue(countParquet(v2.resolve("top_1m")) > 0L);
             assertTrue(countParquet(v2.resolve("signal")) > 0L);
+            assertTrue(countWhere(v2.resolve("heap_gc"), "heap_before IS NOT NULL") > 0L);
+            assertTrue(countWhere(v2.resolve("heap_gc"), "estimated = true") > 0L);
         }
     }
 

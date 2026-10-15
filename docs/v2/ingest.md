@@ -34,6 +34,10 @@ A file older than `jafra.compact.min-age` (default 1 hour, by modification time)
 
 Decode runs on a pool of `jafra.decode.threads` (default 4). Catalog writes are serialized on the DuckDB file.
 
+## Heap pictures
+
+`heap_gc` has one row per `jdk.GarbageCollection`, plus a row for each ZGC young or old collection that is not already that id. Before and after come from `jdk.GCHeapSummary`. G1 adds eden and survivor from `jdk.G1HeapSummary`; old used is heap minus those two, and promoted bytes are the growth in old. Parallel reads eden, survivor, and old from `jdk.PSHeapSummary`. Serial has no generation used-sizes: the row keeps the heap totals, sets `estimated` when `YoungGenerationConfiguration.newRatio` can size the young capacity as `committed / (newRatio + 1)`, and copies `tenuringThreshold` from `jdk.YoungGarbageCollection`. `g1_region_frame` stores a count and used total per region type. Humongous region counts land on the collection with the same `gc_id`.
+
 ## Signals and container facts
 
 Each chunk also writes `signal` (one row per id in `signals.yaml`) and, when it applies, a `finding` row `ERGONOMIC_SERIAL_GC`. Container limits come from `jdk.ContainerConfiguration`: `cpu_limit_cores` is quota divided by the slice period (null when the quota is unlimited), `cpu_request_millicores_approx` rounds `cpuShares * 1000 / 1024` to the nearest 10, and cgroup v2 marks that request `approx_v2_weight_mapping`. Shares of 2 are `best_effort`. A negative memory limit is stored as null. `memory_request` is always `not_exposed_by_cgroup`.

@@ -400,7 +400,7 @@ public final class V2ReadService {
         blocks.put("cpu", block(headline(id, range, "cpu.jvm_user", "last", compact), null, List.of()));
         blocks.put("container", block(headline(id, range, "container.memory_usage", "last", compact), signals.get("container"), List.of()));
         blocks.put("gc", block(headline(id, range, "gc.pause_ms", "p99", compact), null, codes));
-        blocks.put("heap", block(Map.of(), signals.get("heap.pools"), List.of()));
+        blocks.put("heap", block(heapHeadline(id, range, compact), null, List.of()));
         blocks.put("alloc", block(headline(id, range, "alloc.bytes", "sum", compact), null, List.of()));
         blocks.put("jit", block(headline(id, range, "compile.ms", "sum", compact), null, List.of()));
         blocks.put("safepoint", block(headline(id, range, "safepoint.ms", "p99", compact), null, List.of()));
@@ -414,6 +414,127 @@ public final class V2ReadService {
         Map<String, Object> response = identity(id);
         response.put("blocks", blocks);
         return response;
+    }
+
+    public Map<String, Object> heap(Identity id, V2Window.Range range, boolean compact) throws SQLException {
+        Map<String, Object> response = identity(id);
+        String glob = glob("heap_gc", id);
+        if (glob == null) {
+            response.put("status", "no_data_in_window");
+            response.put("collections", List.of());
+            return response;
+        }
+        String sql = "SELECT t, gc_id, name, cause, kind, collector, estimated, heap_before, heap_after, committed, "
+                + "eden_before, eden_after, survivor_before, survivor_after, old_before, old_after, young_capacity, "
+                + "humongous_regions, promoted_bytes, tenuring_threshold FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
+                + " ORDER BY t LIMIT 501";
+        List<Map<String, Object>> collections = new ArrayList<>();
+        String collector = null;
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("t", result.getLong(1));
+                put(row, "gc_id", result.getObject(2));
+                put(row, "name", result.getString(3));
+                put(row, "cause", result.getString(4));
+                put(row, "kind", result.getString(5));
+                if (collector == null) {
+                    collector = result.getString(6);
+                }
+                put(row, "collector", collector);
+                row.put("estimated", result.getBoolean(7));
+                Map<String, Object> before = generations(result, 8, 11, 13, 15, compact);
+                Map<String, Object> after = generations(result, 9, 12, 14, 16, compact);
+                if (!before.isEmpty()) {
+                    row.put("before", before);
+                }
+                if (!after.isEmpty()) {
+                    row.put("after", after);
+                }
+                put(row, "committed", bytes(result.getObject(10), compact));
+                put(row, "young_capacity", bytes(result.getObject(17), compact));
+                put(row, "humongous_regions", result.getObject(18));
+                put(row, "promoted_bytes", bytes(result.getObject(19), compact));
+                put(row, "tenuring_threshold", result.getObject(20));
+                collections.add(row);
+            }
+        }
+        boolean truncated = collections.size() > 500;
+        if (truncated) {
+            collections = new ArrayList<>(collections.subList(0, 500));
+        }
+        response.put("status", collections.isEmpty() ? "no_data_in_window" : "ok");
+        if (truncated) {
+            response.put("truncated", true);
+        }
+        put(response, "collector", collector);
+        response.put("collections", collections);
+        response.put("regions", regionFrames(id, range));
+        return response;
+    }
+
+    private Map<String, Object> heapHeadline(Identity id, V2Window.Range range, boolean compact) throws SQLException {
+        String glob = glob("heap_gc", id);
+        if (glob == null) {
+            return Map.of();
+        }
+        String sql = "SELECT arg_max(heap_after, t) FILTER (WHERE heap_after IS NOT NULL) FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs();
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            if (!result.next() || result.getObject(1) == null) {
+                return Map.of();
+            }
+            Map<String, Object> metrics = new LinkedHashMap<>();
+            metrics.put("heap.after", bytes(result.getObject(1), compact));
+            return metrics;
+        }
+    }
+
+    private Map<String, Object> regionFrames(Identity id, V2Window.Range range) throws SQLException {
+        String glob = glob("g1_region_frame", id);
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (glob == null) {
+            body.put("status", "no_data_in_window");
+            return body;
+        }
+        String sql = "SELECT t, gc_id, type, region_count, used FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
+                + " ORDER BY t LIMIT 500";
+        List<Map<String, Object>> frames = new ArrayList<>();
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                Map<String, Object> frame = new LinkedHashMap<>();
+                frame.put("t", result.getLong(1));
+                put(frame, "gc_id", result.getObject(2));
+                frame.put("type", result.getString(3));
+                frame.put("count", result.getLong(4));
+                frame.put("used", result.getLong(5));
+                frames.add(frame);
+            }
+        }
+        body.put("status", frames.isEmpty() ? "no_data_in_window" : "ok");
+        if (!frames.isEmpty()) {
+            body.put("frames", frames);
+        }
+        return body;
+    }
+
+    private static Map<String, Object> generations(ResultSet result, int heap, int eden, int survivor, int old, boolean compact)
+            throws SQLException {
+        Map<String, Object> values = new LinkedHashMap<>();
+        put(values, "heap", bytes(result.getObject(heap), compact));
+        put(values, "eden", bytes(result.getObject(eden), compact));
+        put(values, "survivor", bytes(result.getObject(survivor), compact));
+        put(values, "old", bytes(result.getObject(old), compact));
+        return values;
+    }
+
+    private static Object bytes(Object value, boolean compact) {
+        if (!(value instanceof Number number)) {
+            return null;
+        }
+        return number(number.doubleValue(), "bytes", compact);
     }
 
     private Map<String, Object> block(Map<String, Object> metrics, ReadSignal signal, List<String> findings) {
