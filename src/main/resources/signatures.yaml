@@ -1,0 +1,106 @@
+# Detector catalogue. Predicates run on the 1 minute rollups and the heap pictures in the requested window.
+- id: GC_PRESSURE
+  gc: any
+  negative: true
+  fixture: scenarios/gc-pressure
+  metrics: [gc.overhead_pct > 10, young_gc_per_s > 1, heap.after_gc_pct > 70]
+- id: ALLOCATION_STORM
+  gc: any
+  negative: true
+  fixture: scenarios/allocation-storm
+  metrics: [alloc.rate_ratio >= 3, heap.after_gc_floor.flat]
+- id: MEMORY_LEAK
+  gc: any
+  negative: true
+  fixture: scenarios/memory-leak
+  metrics: [heap.after_gc_floor.slope_per_h > 0, heap.after_gc_floor.r2 > 0.7, heap.after_gc_floor.pct > 50]
+- id: PREMATURE_PROMOTION
+  gc: any
+  negative: false
+  fixture: scenarios/premature-promotion
+  metrics: [tenuring_threshold <= 2, survivor.near_capacity, promotion.rate.high, alloc.normal]
+- id: HUMONGOUS_ALLOC
+  gc: G1
+  negative: true
+  fixture: scenarios/humongous-alloc
+  metrics: [humongous.region_pct > 10, cause = G1 Humongous Allocation]
+- id: EVACUATION_FAILURE
+  gc: any
+  negative: true
+  fixture: scenarios/evacuation-failure
+  metrics: [evacuation_failed > 0]
+- id: METASPACE_GROWTH
+  gc: any
+  negative: true
+  fixture: scenarios/metaspace-growth
+  metrics: [metaspace.used.slope > 0, classes.loaded_minus_unloaded.rising, cause = Metadata GC Threshold]
+- id: CPU_THROTTLING
+  gc: any
+  negative: true
+  fixture: scenarios/cpu-throttling
+  metrics: [container.throttle_ratio > 0.2, cpu.jvm_cores ~= cpu_limit]
+- id: CPU_HOTSPOT
+  gc: any
+  negative: true
+  fixture: scenarios/cpu-hotspot
+  metrics: [cpu.jvm_cores > 0.8 * effective_cpus, top.method.share > 0.2, samples >= 300]
+- id: LOCK_CONTENTION
+  gc: any
+  negative: true
+  fixture: scenarios/lock-contention
+  metrics: [lock.blocked_pct > 10, lock.monitor.share > 0.5]
+- id: POOL_EXHAUSTION_OR_DB_WAIT
+  gc: any
+  negative: true
+  fixture: scenarios/pool-exhaustion
+  metrics: [thread_group.parked_share > 0.8]
+- id: IO_LATENCY
+  gc: any
+  negative: true
+  fixture: scenarios/io-latency
+  metrics: [io.p99 > 10 * baseline]
+- id: SAFEPOINT_STORM
+  gc: any
+  negative: true
+  fixture: scenarios/safepoint-storm
+  metrics: [safepoint.per_s > 10, safepoint.time_pct > 5]
+- id: JIT_DEOPT_STORM
+  gc: any
+  negative: true
+  fixture: scenarios/jit-deopt-storm
+  metrics: [deopt.per_min > 100]
+- id: CODE_CACHE_FULL
+  gc: any
+  negative: true
+  fixture: scenarios/code-cache-full
+  metrics: [code_cache_full > 0]
+- id: NATIVE_LEAK
+  gc: any
+  negative: true
+  fixture: scenarios/native-leak
+  metrics: [rss.slope > 0, heap.committed.flat]
+- id: THREAD_LEAK
+  gc: any
+  negative: true
+  fixture: scenarios/thread-leak
+  metrics: [threads.live.slope > 0, thread.starts >> thread.ends]
+- id: EXCEPTION_STORM
+  gc: any
+  negative: true
+  fixture: scenarios/exception-storm
+  metrics: [exceptions.per_s > 10000]
+- id: CONTAINER_OOM_RISK
+  gc: any
+  negative: true
+  fixture: scenarios/container-oom-risk
+  metrics: [container.memory_usage / mem_limit > 0.9]
+- id: ERGONOMIC_SERIAL_GC
+  gc: Serial
+  negative: true
+  fixture: scenarios/ergonomic-serial-gc
+  metrics: [gc_selected_by = ergonomic, serial, effective_cpus < 2 or mem_limit < 1792MiB]
+- id: HEALTHY
+  gc: any
+  negative: false
+  fixture: scenarios/healthy
+  metrics: [no other finding]

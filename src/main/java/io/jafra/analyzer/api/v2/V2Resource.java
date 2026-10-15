@@ -15,7 +15,7 @@ import jakarta.ws.rs.core.MediaType;
 
 import io.jafra.analyzer.api.RecordingWindowSelection;
 
-/** Read API over the ingest Parquet tables. Heap generations are a later cut. */
+/** Read API over the ingest Parquet tables. Findings are evaluated on the request window. */
 @Path("/v2")
 @Produces(MediaType.APPLICATION_JSON)
 public class V2Resource {
@@ -100,6 +100,22 @@ public class V2Resource {
         V2Window.Range range = window(last, from, to, before, after);
         V2ReadService.Identity id = identity(ns, pod, container, instance);
         return call(() -> reads.top(id, range, kind, group, limit, compare(compareFrom, compareTo), compact(format)));
+    }
+
+    @GET
+    @Path("findings")
+    public Map<String, Object> findings(
+            @QueryParam("ns") String ns,
+            @QueryParam("pod") String pod,
+            @QueryParam("container") String container,
+            @QueryParam("instance") String instance,
+            @QueryParam("last") String last,
+            @QueryParam("from") String from,
+            @QueryParam("to") String to,
+            @QueryParam("before") String before,
+            @QueryParam("after") String after) {
+        V2Window.Range range = window(last, from, to, before, after);
+        return call(() -> reads.findings(identity(ns, pod, container, instance), range));
     }
 
     @GET

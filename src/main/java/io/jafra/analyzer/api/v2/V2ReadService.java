@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
+import io.jafra.analyzer.findings.FindingDetectors;
+import io.jafra.analyzer.findings.WindowSnapshot;
 import io.jafra.analyzer.ingest.decode.ParquetTables;
 import io.jafra.analyzer.metrics.MetricRegistry;
 import io.jafra.analyzer.signals.SignalRegistry;
@@ -518,6 +520,229 @@ public final class V2ReadService {
             body.put("frames", frames);
         }
         return body;
+    }
+
+    public Map<String, Object> findings(Identity id, V2Window.Range range) throws SQLException {
+        WindowSnapshot snapshot = new WindowSnapshot();
+        snapshot.windowNs = Math.max(0L, range.toNs() - range.fromNs());
+        loadRollups(id, range, snapshot);
+        loadHeapFindings(id, range, snapshot);
+        loadMarkerFindings(id, range, snapshot);
+        loadTopFindings(id, range, snapshot);
+        loadLimitFindings(id, snapshot);
+        if (findings(id).contains("ERGONOMIC_SERIAL_GC")) {
+            snapshot.ergonomicSerial = true;
+            snapshot.observed = true;
+        }
+        Map<String, Object> response = identity(id);
+        response.put("t_from", range.fromNs());
+        response.put("t_to", range.toNs());
+        if (!snapshot.observed) {
+            response.put("status", "no_data_in_window");
+            response.put("findings", List.of());
+            return response;
+        }
+        response.put("status", "ok");
+        response.put("findings", FindingDetectors.evaluate(snapshot));
+        return response;
+    }
+
+    private void loadRollups(Identity id, V2Window.Range range, WindowSnapshot snapshot) throws SQLException {
+        String glob = glob("rollup_1m", id);
+        if (glob == null) {
+            return;
+        }
+        String sql = "SELECT metric, CAST(bucket_t AS BIGINT), sum, n, p99, last FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE CAST(bucket_t AS BIGINT) >= " + range.fromNs()
+                + " AND CAST(bucket_t AS BIGINT) < " + range.toNs() + " ORDER BY 2";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                snapshot.observed = true;
+                String metric = result.getString(1);
+                double sum = result.getDouble(3);
+                double n = result.getDouble(4);
+                double p99 = result.getDouble(5);
+                double last = result.getDouble(6);
+                switch (metric) {
+                    case "gc.pause_ms" -> snapshot.pauseMs += sum;
+                    case "alloc.bytes" -> {
+                        snapshot.allocBytes += sum;
+                        snapshot.allocPerSec.add(sum / 60.0);
+                    }
+                    case "cpu.jvm_user" -> snapshot.jvmCores = last;
+                    case "container.throttled_slices" -> snapshot.throttledSlices += sum;
+                    case "container.elapsed_slices" -> snapshot.elapsedSlices += sum;
+                    case "container.memory_usage" -> snapshot.memoryUsage = last;
+                    case "exceptions.throwables" -> snapshot.throwables += sum;
+                    case "classes.loaded" -> snapshot.classesLoaded += sum;
+                    case "classes.unloaded" -> snapshot.classesUnloaded += sum;
+                    case "safepoint.ms" -> {
+                        snapshot.safepointMs += sum;
+                        snapshot.safepointCount += (long) n;
+                    }
+                    case "deopt.ms" -> snapshot.deoptCount += (long) n;
+                    case "lock.enter_ms" -> snapshot.lockMs += sum;
+                    case "rss" -> snapshot.rss.add(last);
+                    case "threads.live" -> snapshot.liveThreads.add(last);
+                    case "io.socket_read_ms" -> snapshot.socketP99.add(p99);
+                    case "io.file_read_ms" -> snapshot.fileP99.add(p99);
+                    default -> {
+                    }
+                }
+            }
+        }
+    }
+
+    private void loadHeapFindings(Identity id, V2Window.Range range, WindowSnapshot snapshot) throws SQLException {
+        String glob = glob("heap_gc", id);
+        if (glob == null) {
+            return;
+        }
+        String sql = "SELECT kind, collector, cause, heap_after, committed, survivor_after, young_capacity, tenuring_threshold, "
+                + "humongous_regions, promoted_bytes FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
+                + " ORDER BY t";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                snapshot.observed = true;
+                String kind = result.getString(1);
+                if (snapshot.collector == null) {
+                    snapshot.collector = result.getString(2);
+                }
+                String cause = result.getString(3);
+                if (cause != null && cause.toLowerCase().contains("humongous")) {
+                    snapshot.humongousCause = true;
+                }
+                if (cause != null && cause.toLowerCase().contains("metadata")) {
+                    snapshot.metadataGcCause = true;
+                }
+                if ("young".equals(kind) || "z_young".equals(kind)) {
+                    snapshot.youngGcs++;
+                }
+                if (result.getObject(4) != null) {
+                    snapshot.heapAfter.add(result.getDouble(4));
+                }
+                if (result.getObject(5) != null) {
+                    snapshot.heapCommitted.add(result.getDouble(5));
+                    snapshot.heapMax = snapshot.heapMax == null ? result.getLong(5) : Math.max(snapshot.heapMax, result.getLong(5));
+                }
+                if (result.getObject(6) != null && result.getObject(7) != null && result.getDouble(7) > 0.0
+                        && result.getDouble(6) >= 0.9 * result.getDouble(7)) {
+                    snapshot.survivorFullGcs++;
+                }
+                if (result.getObject(8) != null && result.getInt(8) <= 2) {
+                    snapshot.lowTenuringGcs++;
+                }
+                if (result.getObject(9) != null) {
+                    snapshot.humongousRegions = Math.max(snapshot.humongousRegions, result.getLong(9));
+                }
+                if (result.getObject(10) != null) {
+                    snapshot.promotedBytes += result.getDouble(10);
+                }
+            }
+        }
+        String regions = glob("g1_region_frame", id);
+        if (regions == null) {
+            return;
+        }
+        String countSql = "SELECT coalesce(sum(region_count), 0) FROM read_parquet('" + regions
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs();
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(countSql)) {
+            if (result.next()) {
+                snapshot.regionCount = result.getLong(1);
+            }
+        }
+    }
+
+    private void loadMarkerFindings(Identity id, V2Window.Range range, WindowSnapshot snapshot) throws SQLException {
+        String glob = glob("marker", id);
+        if (glob == null) {
+            return;
+        }
+        String sql = "SELECT kind, count(*) FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
+                + " GROUP BY 1";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                snapshot.observed = true;
+                String kind = result.getString(1);
+                long count = result.getLong(2);
+                if ("evac_failure".equals(kind) || "promotion_failed".equals(kind)) {
+                    snapshot.evacuationFailures += count;
+                } else if ("allocation_stall".equals(kind)) {
+                    snapshot.allocationStalls += count;
+                } else if ("code_cache_full".equals(kind)) {
+                    snapshot.codeCacheFull = true;
+                }
+            }
+        }
+    }
+
+    private void loadTopFindings(Identity id, V2Window.Range range, WindowSnapshot snapshot) throws SQLException {
+        String glob = glob("top_1m", id);
+        if (glob == null) {
+            return;
+        }
+        String sql = "SELECT kind, grp, \"key\", sum(weight), sum(n) FROM read_parquet('" + glob
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
+                + " GROUP BY 1, 2, 3";
+        double cpuWeight = 0.0;
+        double cpuMax = 0.0;
+        long cpuSamples = 0L;
+        double lockWeight = 0.0;
+        double lockMax = 0.0;
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            while (result.next()) {
+                snapshot.observed = true;
+                double weight = result.getDouble(4);
+                long n = result.getLong(5);
+                if ("cpu".equals(result.getString(1)) && "method".equals(result.getString(2))) {
+                    cpuWeight += weight;
+                    cpuMax = Math.max(cpuMax, weight);
+                    cpuSamples += n;
+                }
+                if ("lock".equals(result.getString(1)) && "monitor".equals(result.getString(2))) {
+                    lockWeight += weight;
+                    lockMax = Math.max(lockMax, weight);
+                }
+            }
+        }
+        if (cpuWeight > 0.0) {
+            snapshot.topMethodShare = cpuMax / cpuWeight;
+            snapshot.topSamples = cpuSamples;
+        }
+        if (lockWeight > 0.0) {
+            snapshot.monitorShare = lockMax / lockWeight;
+        }
+    }
+
+    private void loadLimitFindings(Identity id, WindowSnapshot snapshot) throws SQLException {
+        String glob = glob("jvm_instance", id);
+        if (glob == null) {
+            return;
+        }
+        String sql = "SELECT "
+                + "arg_max(mem_limit, t) FILTER (WHERE mem_limit IS NOT NULL), "
+                + "arg_max(effective_cpus, t) FILTER (WHERE effective_cpus IS NOT NULL), "
+                + "arg_max(cpu_limit_cores, t) FILTER (WHERE cpu_limit_cores IS NOT NULL) "
+                + "FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true)";
+        try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
+            if (!result.next()) {
+                return;
+            }
+            if (result.getObject(1) != null) {
+                snapshot.memLimit = result.getDouble(1);
+            }
+            if (result.getObject(2) != null) {
+                snapshot.effectiveCpus = result.getDouble(2);
+            }
+            if (result.getObject(3) != null) {
+                snapshot.cpuLimitCores = result.getDouble(3);
+            }
+        }
+        if (snapshot.effectiveCpus != null && snapshot.effectiveCpus > 0.0 && snapshot.jvmCores <= 1.5) {
+            snapshot.jvmCores = snapshot.jvmCores * snapshot.effectiveCpus;
+        }
     }
 
     private static Map<String, Object> generations(ResultSet result, int heap, int eden, int survivor, int old, boolean compact)
