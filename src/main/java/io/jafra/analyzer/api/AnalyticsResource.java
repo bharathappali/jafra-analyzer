@@ -33,6 +33,7 @@ public class AnalyticsResource {
             @QueryParam("top") Integer top,
             @QueryParam("bucketSeconds") Long bucketSeconds,
             @QueryParam("subsystem") String subsystem,
+            @QueryParam("stacks") String stacks,
             @QueryParam("last") String last,
             @QueryParam("from") String from,
             @QueryParam("to") String to,
@@ -50,7 +51,7 @@ public class AnalyticsResource {
                 after,
                 selected -> {
                     try {
-                        return analytics.timeseries(selected, top, bucketSeconds, subsystem);
+                        return analytics.timeseries(selected, top, bucketSeconds, subsystem, stackIds(stacks));
                     } catch (IllegalArgumentException error) {
                         throw RecordingWindowSelection.badRequest(error.getMessage());
                     } catch (IOException error) {
@@ -69,6 +70,7 @@ public class AnalyticsResource {
             @QueryParam("recording") String recording,
             @QueryParam("top") Integer top,
             @QueryParam("subsystem") String subsystem,
+            @QueryParam("stacks") String stacks,
             @QueryParam("from") String from,
             @QueryParam("to") String to) {
         String last = (from != null && !from.isBlank() && to != null && !to.isBlank()) ? null : "24h";
@@ -84,12 +86,16 @@ public class AnalyticsResource {
                 null,
                 selected -> {
                     try {
-                        return analytics.dailyStats(selected, top, subsystem);
+                        return analytics.dailyStats(selected, top, subsystem, stackIds(stacks));
                     } catch (IllegalArgumentException error) {
                         throw RecordingWindowSelection.badRequest(error.getMessage());
                     } catch (IOException error) {
                         throw RecordingWindowSelection.unavailable(selected, error.getMessage());
                     }
                 });
+    }
+
+    static boolean stackIds(String stacks) {
+        return stacks != null && "ids".equalsIgnoreCase(stacks.trim());
     }
 }

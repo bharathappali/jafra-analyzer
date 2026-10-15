@@ -9,6 +9,8 @@ import java.util.Set;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
+import io.jafra.analyzer.recordings.stats.Pearson;
+
 @ApplicationScoped
 public class CorrelationsEngine {
 
@@ -17,13 +19,26 @@ public class CorrelationsEngine {
         out.put("cpuVsWall", cpuVsWall(subsystems));
         out.put("heapVsRss", heapVsRss(subsystems));
         out.put("stackIntersections", stackIntersections(subsystems));
-        out.put("allocVsGc", statusOnly("allocation and gc rollups", subsystems.get("allocations"), subsystems.get("gc")));
-        out.put("jvmVsMachineCpu", statusOnly("cpu rollup", subsystems.get("cpu"), null));
-        out.put("throttleVsLatencyProxy", statusOnly("container and wall_time", subsystems.get("container"), subsystems.get("wall_time")));
-        out.put("contentionVsWall", statusOnly("locks and wall_time", subsystems.get("locks"), subsystems.get("wall_time")));
+        out.put("allocVsGc", correlateSeries(
+                subsystems.get("allocations"), "allocationBytesPerBucket", false,
+                subsystems.get("gc"), "pauseSumMsPerBucket", false));
+        out.put("jvmVsMachineCpu", correlateSeries(
+                subsystems.get("cpu"), "jvmCpuPercent", false,
+                subsystems.get("cpu"), "machineTotalPercent", false));
+        out.put("throttleVsLatencyProxy", correlateSeries(
+                subsystems.get("container"), "throttleRatio", false,
+                subsystems.get("wall_time"), "percentSleeping", false));
+        out.put("contentionVsWall", correlateSeries(
+                subsystems.get("locks"), "blockedMsPerBucket", false,
+                subsystems.get("wall_time"), "wallSamplesPerSec", false));
         out.put("compileVsNativeMalloc", compileVsMalloc(subsystems));
-        out.put("exceptionsVsGc", statusOnly("exceptions and gc", subsystems.get("exceptions"), subsystems.get("gc")));
-        out.put("ioVsBlockedThreads", statusOnly("io and wall_time", subsystems.get("io"), subsystems.get("wall_time")));
+        out.put("exceptionsVsGc", correlateSeries(
+                subsystems.get("exceptions"), "throwsPerBucket", false,
+                subsystems.get("gc"), "pauseSumMsPerBucket", false));
+        out.put("ioVsBlockedThreads", correlateSeries(
+                subsystems.get("io"), "ioDurationMsPerBucket", false,
+                subsystems.get("wall_time"), "wallSamplesPerSec", false));
+        out.put("throttleVsRunnableWithoutCpu", throttleVsRunnableWithoutCpu(subsystems));
         return out;
     }
 
@@ -113,14 +128,94 @@ public class CorrelationsEngine {
         return result;
     }
 
-    private static Map<String, Object> statusOnly(
-            String label, AnalyticsModels.SubsystemResult left, AnalyticsModels.SubsystemResult right) {
-        if (left == null || isAbsent(left) || (right != null && isAbsent(right))) {
-            return insufficient();
+    private static Map<String, Object> throttleVsRunnableWithoutCpu(
+            Map<String, AnalyticsModels.SubsystemResult> subsystems) {
+        List<AnalyticsModels.SeriesPoint> throttle = points(subsystems.get("container"), "throttleRatio");
+        List<AnalyticsModels.SeriesPoint> runnable = points(subsystems.get("wall_time"), "runnableSamplesPerBucket");
+        List<AnalyticsModels.SeriesPoint> cpu = points(subsystems.get("cpu"), "cpuSampleRatePerSec");
+        if (throttle.isEmpty() || runnable.isEmpty() || cpu.isEmpty()) {
+            return insufficient(0);
         }
+        Map<String, Double> runnableByAt = valuesByAt(runnable, false);
+        Map<String, Double> cpuByAt = valuesByAt(cpu, true);
+        List<Double> left = new ArrayList<>();
+        List<Double> right = new ArrayList<>();
+        for (AnalyticsModels.SeriesPoint point : throttle) {
+            if (!runnableByAt.containsKey(point.at()) || !cpuByAt.containsKey(point.at())) {
+                continue;
+            }
+            left.add(number(point, false));
+            Double runnableValue = runnableByAt.get(point.at());
+            Double cpuSamples = cpuByAt.get(point.at());
+            if (runnableValue == null && cpuSamples == null) {
+                right.add(null);
+            } else {
+                double runnableSamples = runnableValue == null ? 0.0 : runnableValue;
+                double samples = cpuSamples == null ? 0.0 : cpuSamples;
+                right.add(Math.max(0.0, runnableSamples - samples));
+            }
+        }
+        return Pearson.bestLag(left, right);
+    }
+
+    private static Map<String, Object> correlateSeries(
+            AnalyticsModels.SubsystemResult leftSubsystem,
+            String leftId,
+            boolean leftCount,
+            AnalyticsModels.SubsystemResult rightSubsystem,
+            String rightId,
+            boolean rightCount) {
+        List<AnalyticsModels.SeriesPoint> leftPoints = points(leftSubsystem, leftId);
+        List<AnalyticsModels.SeriesPoint> rightPoints = points(rightSubsystem, rightId);
+        if (leftPoints.isEmpty() || rightPoints.isEmpty()) {
+            return insufficient(0);
+        }
+        Map<String, Double> rightByAt = valuesByAt(rightPoints, rightCount);
+        List<Double> left = new ArrayList<>();
+        List<Double> right = new ArrayList<>();
+        for (AnalyticsModels.SeriesPoint point : leftPoints) {
+            if (!rightByAt.containsKey(point.at())) {
+                continue;
+            }
+            left.add(number(point, leftCount));
+            right.add(rightByAt.get(point.at()));
+        }
+        return Pearson.bestLag(left, right);
+    }
+
+    private static List<AnalyticsModels.SeriesPoint> points(AnalyticsModels.SubsystemResult subsystem, String seriesId) {
+        if (subsystem == null || subsystem.series() == null) {
+            return List.of();
+        }
+        for (AnalyticsModels.MetricSeries series : subsystem.series()) {
+            if (seriesId.equals(series.id()) && series.points() != null) {
+                return series.points();
+            }
+        }
+        return List.of();
+    }
+
+    private static Map<String, Double> valuesByAt(List<AnalyticsModels.SeriesPoint> points, boolean useCount) {
+        Map<String, Double> values = new LinkedHashMap<>();
+        for (AnalyticsModels.SeriesPoint point : points) {
+            values.put(point.at(), number(point, useCount));
+        }
+        return values;
+    }
+
+    private static Double number(AnalyticsModels.SeriesPoint point, boolean useCount) {
+        Number raw = useCount ? point.count() : point.value();
+        if (raw == null) {
+            return null;
+        }
+        double value = raw.doubleValue();
+        return Double.isNaN(value) ? null : value;
+    }
+
+    private static Map<String, Object> insufficient(int n) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("status", "ok");
-        result.put("note", "See subsystem rollups and series for " + label + "; cross-align timestamps manually if needed.");
+        result.put("status", "insufficient_data");
+        result.put("n", n);
         return result;
     }
 
@@ -142,10 +237,7 @@ public class CorrelationsEngine {
         if (top instanceof List<?> list) {
             for (Object row : list) {
                 if (row instanceof Map<?, ?> map) {
-                    Object stack = map.get("stack");
-                    if (stack != null) {
-                        keys.add(String.valueOf(stack));
-                    }
+                    addMatchKey(keys, map);
                 }
             }
         }
@@ -153,14 +245,23 @@ public class CorrelationsEngine {
         if (topStacks instanceof List<?> list) {
             for (Object row : list) {
                 if (row instanceof Map<?, ?> map) {
-                    Object stack = map.get("stack");
-                    if (stack != null) {
-                        keys.add(String.valueOf(stack));
-                    }
+                    addMatchKey(keys, map);
                 }
             }
         }
         return keys;
+    }
+
+    private static void addMatchKey(Set<String> keys, Map<?, ?> map) {
+        Object matchKey = map.get("matchKey");
+        if (matchKey != null) {
+            keys.add(String.valueOf(matchKey));
+            return;
+        }
+        Object stack = map.get("stack");
+        if (stack != null) {
+            keys.add(String.valueOf(stack));
+        }
     }
 
     private static void cap(List<String> list, int max) {

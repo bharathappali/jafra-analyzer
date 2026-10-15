@@ -9,6 +9,8 @@ import java.util.Set;
 import org.openjdk.jmc.common.item.IItemCollection;
 
 import io.jafra.analyzer.recordings.JfrAnalyticsSupport;
+import io.jafra.analyzer.recordings.JfrItemAccess;
+import io.jafra.analyzer.recordings.StackIds;
 import io.jafra.analyzer.recordings.TimeBucketGrid;
 
 final class ExceptionsSubsystemBuilder extends AnalyticsSubsystemSupport {
@@ -33,18 +35,23 @@ final class ExceptionsSubsystemBuilder extends AnalyticsSubsystemSupport {
         }
         Map<String, JfrAnalyticsSupport.MutableRank> byClass = new LinkedHashMap<>();
         Map<String, JfrAnalyticsSupport.MutableRank> byStack = new LinkedHashMap<>();
+        int n = grid == null ? 0 : grid.bucketCount();
+        int[] throwBuckets = timeseries(params) && grid != null ? BucketAggregators.newCountBuckets(n) : null;
         for (String typeId : types) {
             for (var iterable : events.apply(org.openjdk.jmc.common.item.ItemFilters.type(typeId))) {
                 for (var item : iterable) {
-                    String clazz = io.jafra.analyzer.recordings.JfrItemAccess.text(
-                            item, "thrownClass", "exceptionClass", "class");
+                    String clazz = JfrItemAccess.text(item, "thrownClass", "exceptionClass", "class");
                     if (clazz == null) {
                         clazz = "(unknown)";
                     }
                     JfrAnalyticsSupport.bump(byClass, "class", clazz, null, 0L, 0L);
-                    String stack = io.jafra.analyzer.recordings.JfrItemAccess.stackTrace(item);
-                    if (stack != null) {
-                        JfrAnalyticsSupport.bump(byStack, "stack", stack, stack, 0L, 0L);
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
+                    String stack = JfrItemAccess.stackTrace(item);
+                    if (identity != null && stack != null) {
+                        JfrAnalyticsSupport.bump(byStack, "stack", stack, stack, identity, 0L, 0L);
+                    }
+                    if (throwBuckets != null) {
+                        BucketAggregators.incrementCount(grid, throwBuckets, JfrItemAccess.startTimeNs(item));
                     }
                 }
             }
@@ -56,13 +63,26 @@ final class ExceptionsSubsystemBuilder extends AnalyticsSubsystemSupport {
         }
         rollup.put("throwCount", throwCount);
         Map<String, Object> evidence = new LinkedHashMap<>();
-        evidence.put("topClasses", evidenceFromRanks(JfrAnalyticsSupport.topRanks(byClass, top(params))).get("top"));
-        evidence.put("topStacks", evidenceFromRanks(JfrAnalyticsSupport.topRanks(byStack, top(params))).get("top"));
+        evidence.put(
+                "topClasses",
+                evidenceFromRanks(JfrAnalyticsSupport.topRanks(byClass, top(params)), params.stackIds()).get("top"));
+        evidence.put(
+                "topStacks",
+                evidenceFromRanks(JfrAnalyticsSupport.topRanks(byStack, top(params)), params.stackIds()).get("top"));
+        List<AnalyticsModels.MetricSeries> series = new ArrayList<>();
+        if (throwBuckets != null) {
+            series.add(new AnalyticsModels.MetricSeries(
+                    "throwsPerBucket",
+                    "Exception throws",
+                    "count",
+                    "JavaExceptionThrow and JavaErrorThrow events per bucket. Empty buckets are null.",
+                    BucketAggregators.nullableCountSeries(grid, throwBuckets)));
+        }
         return new AnalyticsModels.SubsystemResult(
                 id(),
                 availability,
                 rollup,
-                null,
+                seriesOrNull(timeseries(params), series),
                 evidence,
                 List.of("Hot exception paths add overhead even when handled."));
     }

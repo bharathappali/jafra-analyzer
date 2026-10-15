@@ -122,9 +122,20 @@ final class CpuSubsystemBuilder extends AnalyticsSubsystemSupport {
             List<Map<String, Object>> withPct = new ArrayList<>();
             for (JfrAggregationService.RankedEntry entry : topStacks) {
                 Map<String, Object> row = new LinkedHashMap<>();
-                row.put("stack", entry.stack());
+                if (!params.stackIds() && entry.stack() != null) {
+                    row.put("stack", entry.stack());
+                }
                 row.put("sampleCount", entry.count());
                 row.put("percentOfCpuSamples", 100.0 * entry.count() / sampleCount);
+                if (entry.matchKey() != null) {
+                    row.put("matchKey", entry.matchKey());
+                }
+                if (params.stackIds() && entry.stackId() != null) {
+                    row.put("stackId", entry.stackId());
+                    row.put("leaf", entry.leaf());
+                    row.put("topAppFrame", entry.topAppFrame());
+                    row.put("depth", entry.depth());
+                }
                 withPct.add(row);
             }
             Map<String, Object> evidence = new LinkedHashMap<>();
@@ -142,7 +153,7 @@ final class CpuSubsystemBuilder extends AnalyticsSubsystemSupport {
                 availability,
                 rollup,
                 seriesOrNull(timeseries(params), series),
-                evidenceFromRanks(topStacks),
+                evidenceFromRanks(topStacks, params.stackIds()),
                 List.of("Compare with wall_time when latency exceeds CPU hotspots."));
     }
 }

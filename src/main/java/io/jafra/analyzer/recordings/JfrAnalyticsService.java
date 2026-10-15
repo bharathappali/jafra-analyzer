@@ -30,14 +30,19 @@ public class JfrAnalyticsService {
     CorrelationsEngine correlations;
 
     public AnalyticsModels.AnalyticsDocument timeseries(
-            RecordingCatalog.WindowSelection selection, Integer top, Long bucketSeconds, String subsystemFilter)
+            RecordingCatalog.WindowSelection selection,
+            Integer top,
+            Long bucketSeconds,
+            String subsystemFilter,
+            boolean stackIds)
             throws IOException {
-        return build(selection, true, top, bucketSeconds, subsystemFilter);
+        return build(selection, true, top, bucketSeconds, subsystemFilter, stackIds);
     }
 
     public AnalyticsModels.AnalyticsDocument dailyStats(
-            RecordingCatalog.WindowSelection selection, Integer top, String subsystemFilter) throws IOException {
-        return build(selection, false, top, null, subsystemFilter);
+            RecordingCatalog.WindowSelection selection, Integer top, String subsystemFilter, boolean stackIds)
+            throws IOException {
+        return build(selection, false, top, null, subsystemFilter, stackIds);
     }
 
     private AnalyticsModels.AnalyticsDocument build(
@@ -45,11 +50,12 @@ public class JfrAnalyticsService {
             boolean timeseriesMode,
             Integer top,
             Long bucketSeconds,
-            String subsystemFilter)
+            String subsystemFilter,
+            boolean stackIds)
             throws IOException {
         int cappedTop = clampTop(top);
-        AnalyticsModels.AnalyticsParams params =
-                new AnalyticsModels.AnalyticsParams(cappedTop, bucketSeconds, timeseriesMode, parseFilter(subsystemFilter));
+        AnalyticsModels.AnalyticsParams params = new AnalyticsModels.AnalyticsParams(
+                cappedTop, bucketSeconds, timeseriesMode, parseFilter(subsystemFilter), stackIds);
         IItemCollection events = JfrEventSummarizer.loadEvents(selection);
         Set<String> available = JfrEventSummarizer.discoverTypes(events).keySet();
         boolean profilerPresent = available.stream().anyMatch(id -> id.startsWith("profiler."));

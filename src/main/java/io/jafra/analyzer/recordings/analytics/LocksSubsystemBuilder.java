@@ -92,7 +92,7 @@ final class LocksSubsystemBuilder extends AnalyticsSubsystemSupport {
                 availability,
                 rollup,
                 seriesOrNull(timeseries(params), series),
-                evidenceFromRanks(JfrAnalyticsSupport.topRanks(monitors, top(params))),
+                evidenceFromRanks(JfrAnalyticsSupport.topRanks(monitors, top(params)), params.stackIds()),
                 List.of("Compare with wall_time sleeping/blocked stacks."));
     }
 }

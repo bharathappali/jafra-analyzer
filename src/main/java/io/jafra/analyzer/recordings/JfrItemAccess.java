@@ -1,6 +1,10 @@
 package io.jafra.analyzer.recordings;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+
+import org.openjdk.jmc.common.IMCMethod;
 
 import org.openjdk.jmc.common.item.IAttribute;
 import org.openjdk.jmc.common.item.IItem;
@@ -100,6 +104,46 @@ public final class JfrItemAccess {
             }
         }
         return builder.length() == 0 ? null : builder.toString();
+    }
+
+    public static List<StackIds.Frame> frames(IItem item) {
+        IAttribute<?> attribute = findAttribute(item, "stackTrace");
+        if (attribute == null) {
+            return List.of();
+        }
+        Object raw = readRaw(item, attribute);
+        if (!(raw instanceof IMCStackTrace trace) || trace.getFrames() == null) {
+            return List.of();
+        }
+        List<StackIds.Frame> frames = new ArrayList<>();
+        for (IMCFrame frame : trace.getFrames()) {
+            if (frame == null) {
+                continue;
+            }
+            IMCMethod method = frame.getMethod();
+            String className = "";
+            String methodLabel = "unknown";
+            if (method != null) {
+                if (method.getType() != null && method.getType().getFullName() != null) {
+                    className = method.getType().getFullName();
+                }
+                String name = method.getMethodName();
+                if (name == null || name.isBlank()) {
+                    name = "unknown";
+                }
+                methodLabel = className.isEmpty() ? name : className + "." + name;
+            }
+            String type = frame.getType() == null || frame.getType().getName() == null
+                    ? "unknown"
+                    : frame.getType().getName().toLowerCase(Locale.ROOT);
+            Integer line = frame.getFrameLineNumber();
+            frames.add(new StackIds.Frame(methodLabel, className, line == null ? -1 : line, type));
+        }
+        return frames;
+    }
+
+    public static StackIds.Identity stackIdentity(IItem item) {
+        return StackIds.intern(frames(item));
     }
 
     public static long allocationBytes(IItem item) {

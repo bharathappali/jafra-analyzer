@@ -4,6 +4,7 @@ import static io.jafra.analyzer.test.GoldenWorkloadQuery.workloadWindow;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -36,7 +37,57 @@ class AnalyticsApiGoldenTest {
                 .body("subsystems", hasKey("wall_time"))
                 .body("subsystems", hasKey("container"))
                 .body("correlations.cpuVsWall.status", notNullValue())
+                .body("correlations.allocVsGc", not(hasKey("note")))
+                .body("correlations.jvmVsMachineCpu", not(hasKey("note")))
+                .body("correlations.throttleVsLatencyProxy", not(hasKey("note")))
+                .body("correlations.contentionVsWall", not(hasKey("note")))
+                .body("correlations.exceptionsVsGc", not(hasKey("note")))
+                .body("correlations.ioVsBlockedThreads", not(hasKey("note")))
+                .body("correlations.throttleVsRunnableWithoutCpu", not(hasKey("note")))
                 .body("dataQuality.chunkCount", greaterThan(0));
+    }
+
+    @Test
+    void stackIdsRoundTrip() {
+        String stackId = workloadWindow()
+                .queryParam("stacks", "ids")
+                .when()
+                .get("/api/v1/analytics/timeseries")
+                .then()
+                .statusCode(200)
+                .body("subsystems.cpu.evidence.topStacks[0].stack", equalTo(null))
+                .body("subsystems.cpu.evidence.topStacks[0].stackId", notNullValue())
+                .extract()
+                .path("subsystems.cpu.evidence.topStacks[0].stackId");
+
+        workloadWindow()
+                .when()
+                .get("/api/v1/analytics/timeseries")
+                .then()
+                .statusCode(200)
+                .body("subsystems.cpu.evidence.topStacks[0].stack", notNullValue());
+
+        io.restassured.RestAssured.given()
+                .when()
+                .get("/api/v1/stacks/" + stackId)
+                .then()
+                .statusCode(200)
+                .body("stackId", equalTo(stackId))
+                .body("frames.size()", greaterThan(0));
+
+        io.restassured.RestAssured.given()
+                .queryParam("depth", 1)
+                .when()
+                .get("/api/v1/stacks/" + stackId)
+                .then()
+                .statusCode(200)
+                .body("frames.size()", equalTo(1));
+
+        io.restassured.RestAssured.given()
+                .when()
+                .get("/api/v1/stacks/0000000000000000")
+                .then()
+                .statusCode(404);
     }
 
     @Test

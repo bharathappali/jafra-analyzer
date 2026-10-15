@@ -13,6 +13,7 @@ import org.openjdk.jmc.common.item.ItemFilters;
 
 import io.jafra.analyzer.recordings.JfrAnalyticsSupport;
 import io.jafra.analyzer.recordings.JfrItemAccess;
+import io.jafra.analyzer.recordings.StackIds;
 import io.jafra.analyzer.recordings.TimeBucketGrid;
 
 final class WallTimeSubsystemBuilder extends AnalyticsSubsystemSupport {
@@ -41,10 +42,12 @@ final class WallTimeSubsystemBuilder extends AnalyticsSubsystemSupport {
         List<AnalyticsModels.MetricSeries> series = new ArrayList<>();
         int[] sampleBuckets = null;
         int[] sleepBuckets = null;
+        int[] runnableBuckets = null;
         int n = grid == null ? 0 : grid.bucketCount();
         if (timeseries(params) && grid != null) {
             sampleBuckets = BucketAggregators.newCountBuckets(n);
             sleepBuckets = BucketAggregators.newCountBuckets(n);
+            runnableBuckets = BucketAggregators.newCountBuckets(n);
         }
         for (IItemIterable iterable : events.apply(ItemFilters.type("profiler.WallClockSample"))) {
             for (IItem item : iterable) {
@@ -57,15 +60,19 @@ final class WallTimeSubsystemBuilder extends AnalyticsSubsystemSupport {
                 if (thread != null) {
                     threadCounts.merge(thread, 1L, Long::sum);
                 }
+                StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                 String stack = JfrItemAccess.stackTrace(item);
-                if (stack != null) {
-                    JfrAnalyticsSupport.bump(stacks, "stack", stack, stack, 1L, 0L);
+                if (identity != null && stack != null) {
+                    JfrAnalyticsSupport.bump(stacks, "stack", stack, stack, identity, 1L, 0L);
                 }
                 long t = JfrItemAccess.startTimeNs(item);
                 if (sampleBuckets != null) {
                     BucketAggregators.incrementCount(grid, sampleBuckets, t);
                     if (state != null && state.contains("SLEEP")) {
                         BucketAggregators.incrementCount(grid, sleepBuckets, t);
+                    }
+                    if (state != null && state.contains("RUNNABLE")) {
+                        BucketAggregators.incrementCount(grid, runnableBuckets, t);
                     }
                 }
             }
@@ -89,6 +96,12 @@ final class WallTimeSubsystemBuilder extends AnalyticsSubsystemSupport {
                     "percent",
                     "High value suggests threads blocked, waiting, or idle.",
                     sleepPct));
+            series.add(new AnalyticsModels.MetricSeries(
+                    "runnableSamplesPerBucket",
+                    "Runnable wall samples",
+                    "count",
+                    "Wall samples whose state contains RUNNABLE. Empty buckets are null.",
+                    BucketAggregators.nullableCountSeries(grid, runnableBuckets)));
         }
         Map<String, Object> rollup = new LinkedHashMap<>();
         rollup.put("wallSampleCount", total);
@@ -97,7 +110,8 @@ final class WallTimeSubsystemBuilder extends AnalyticsSubsystemSupport {
             statePct.put(e.getKey(), total == 0 ? 0.0 : 100.0 * e.getValue() / total);
         }
         rollup.put("stateBreakdownPercent", statePct);
-        Map<String, Object> evidence = evidenceFromRanks(JfrAnalyticsSupport.topRanks(stacks, top(params)));
+        Map<String, Object> evidence =
+                evidenceFromRanks(JfrAnalyticsSupport.topRanks(stacks, top(params)), params.stackIds());
         List<Map<String, Object>> topThreads = new ArrayList<>();
         threadCounts.entrySet().stream()
                 .sorted((a, b) -> Long.compare(b.getValue(), a.getValue()))

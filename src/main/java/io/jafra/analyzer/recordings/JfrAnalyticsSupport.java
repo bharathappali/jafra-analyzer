@@ -188,11 +188,12 @@ public final class JfrAnalyticsSupport {
         for (String typeId : typeIds) {
             for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
                 for (IItem item : iterable) {
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                     String stack = JfrItemAccess.stackTrace(item);
-                    if (stack == null) {
+                    if (identity == null || stack == null) {
                         continue;
                     }
-                    bump(byStack, "stack", stack, stack, weightPerSample, 0L);
+                    bump(byStack, "stack", stack, stack, identity, weightPerSample, 0L);
                 }
             }
         }
@@ -209,9 +210,10 @@ public final class JfrAnalyticsSupport {
                         clazz = "(unknown)";
                     }
                     bump(byClass, "class", clazz, null, bytes, 0L);
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                     String stack = JfrItemAccess.stackTrace(item);
-                    if (stack != null) {
-                        bump(byStack, "stack", stack, stack, bytes, 0L);
+                    if (identity != null && stack != null) {
+                        bump(byStack, "stack", stack, stack, identity, bytes, 0L);
                     }
                 }
             }
@@ -286,12 +288,28 @@ public final class JfrAnalyticsSupport {
             String stack,
             long bytes,
             long durationNs) {
-        MutableRank rank = ranks.computeIfAbsent(group + "\0" + key, ignored -> new MutableRank(group, key, stack));
+        bump(ranks, group, key, stack, null, bytes, durationNs);
+    }
+
+    public static void bump(
+            Map<String, MutableRank> ranks,
+            String group,
+            String key,
+            String stack,
+            StackIds.Identity identity,
+            long bytes,
+            long durationNs) {
+        String mergeKey = identity == null ? key : identity.stackId();
+        MutableRank rank = ranks.computeIfAbsent(
+                group + "\0" + mergeKey, ignored -> new MutableRank(group, key, stack, identity));
         rank.count++;
         rank.bytes += bytes;
         rank.totalNs += durationNs;
         if (rank.stack == null && stack != null) {
             rank.stack = stack;
+        }
+        if (rank.identity == null && identity != null) {
+            rank.identity = identity;
         }
     }
 
@@ -299,18 +317,26 @@ public final class JfrAnalyticsSupport {
         public final String group;
         public final String key;
         public String stack;
+        public StackIds.Identity identity;
         public long count;
         public long bytes;
         public long totalNs;
 
-        MutableRank(String group, String key, String stack) {
+        MutableRank(String group, String key, String stack, StackIds.Identity identity) {
             this.group = group;
             this.key = key;
             this.stack = stack;
+            this.identity = identity;
         }
 
         JfrAggregationService.RankedEntry toEntry() {
-            return new JfrAggregationService.RankedEntry(group, key, stack, count, bytes, totalNs);
+            String stackId = identity == null ? null : identity.stackId();
+            String leaf = identity == null ? null : identity.leaf();
+            String topApp = identity == null ? null : identity.topAppFrame();
+            Integer depth = identity == null ? null : identity.depth();
+            String matchKey = identity == null ? null : identity.matchKey();
+            return new JfrAggregationService.RankedEntry(
+                    group, key, stack, count, bytes, totalNs, stackId, leaf, topApp, depth, matchKey);
         }
     }
 

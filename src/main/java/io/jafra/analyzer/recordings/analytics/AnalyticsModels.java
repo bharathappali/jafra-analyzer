@@ -66,7 +66,8 @@ public final class AnalyticsModels {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Marker(String at, String kind, String magnitude, String subsystemRef) {}
 
-    public record AnalyticsParams(int top, Long bucketSeconds, boolean timeseriesMode, List<String> subsystemFilter) {}
+    public record AnalyticsParams(
+            int top, Long bucketSeconds, boolean timeseriesMode, List<String> subsystemFilter, boolean stackIds) {}
 
     public static final String MODE_TIMESERIES = "timeseries";
     public static final String MODE_DAILY = "daily_stats";

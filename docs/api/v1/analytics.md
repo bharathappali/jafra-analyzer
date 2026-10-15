@@ -26,6 +26,7 @@ GET /api/v1/analytics/timeseries?namespace=default&pod=auth-cache-84cd9fbc49-ftt
 | `top` | 15 (max 30) | Evidence list sizes |
 | `bucketSeconds` | adaptive | Override bucket width (1–3600) |
 | `subsystem` | all 14 | Comma filter |
+| `stacks` | full text | `ids` omits stack text and adds `stackId`, `leaf`, `topAppFrame`, `depth`. Resolve frames with `GET /api/v1/stacks/{id}?depth=N` (default 16). Unknown ids are 404. The catalog lasts for the process. |
 
 **Full response:** [samples/analytics-timeseries-profiler-window.json](samples/analytics-timeseries-profiler-window.json) (~100 KB)
 
@@ -265,6 +266,14 @@ Each key returns `status: ok` or `insufficient_data`.
 | `heapVsRss` | `heapUsedSlopePerHour`, `rssSlopePerHour`, `divergencePerHour`, `heapVsRssGapMeanBytes` |
 | `stackIntersections` | `cpuWallAlloc` stack keys |
 | `compileVsNativeMalloc` | compilation vs malloc totals |
-| `allocVsGc`, `jvmVsMachineCpu`, … | `status: ok` with note to use subsystem rollups |
+| `allocVsGc` | allocation bytes vs GC pause sum. `status`, `r`, `lagBuckets`, `n`, or `insufficient_data` |
+| `jvmVsMachineCpu` | JVM CPU vs machine CPU |
+| `throttleVsLatencyProxy` | container throttle ratio vs wall `percentSleeping` |
+| `throttleVsRunnableWithoutCpu` | throttle ratio vs `max(0, runnable wall samples − CPU samples)` |
+| `contentionVsWall` | blocked milliseconds vs wall samples |
+| `exceptionsVsGc` | throws vs GC pause sum |
+| `ioVsBlockedThreads` | I/O duration vs wall samples |
+
+Pearson keys pair non-null buckets and search lags −3..+3. `n` below 20, a missing series, or daily stats (no bucket grid) returns `{status: insufficient_data, n}`.
 
 **Markers** (timeseries): `gc_pause`, `cpu_throttle`, `data_loss` with `at`, `magnitude`, `subsystemRef`.

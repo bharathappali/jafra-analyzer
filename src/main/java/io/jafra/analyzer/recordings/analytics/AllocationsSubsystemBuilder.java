@@ -1,13 +1,16 @@
 package io.jafra.analyzer.recordings.analytics;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import org.openjdk.jmc.common.item.IItemCollection;
+import org.openjdk.jmc.common.item.ItemFilters;
 
 import io.jafra.analyzer.recordings.JfrAnalyticsSupport;
+import io.jafra.analyzer.recordings.JfrItemAccess;
 import io.jafra.analyzer.recordings.TimeBucketGrid;
 
 final class AllocationsSubsystemBuilder extends AnalyticsSubsystemSupport {
@@ -55,13 +58,42 @@ final class AllocationsSubsystemBuilder extends AnalyticsSubsystemSupport {
         rollup.put("outsideTlabEventCount", outside);
         rollup.put("outsideTlabRatio", eventCount == 0 ? 0.0 : (double) outside / eventCount);
         Map<String, Object> evidence = new LinkedHashMap<>();
-        evidence.put("topClasses", evidenceFromRanks(JfrAnalyticsSupport.topRanks(byClass, top(params))).get("top"));
-        evidence.put("topStacks", evidenceFromRanks(JfrAnalyticsSupport.topRanks(byStack, top(params))).get("top"));
+        evidence.put(
+                "topClasses",
+                evidenceFromRanks(JfrAnalyticsSupport.topRanks(byClass, top(params)), params.stackIds()).get("top"));
+        evidence.put(
+                "topStacks",
+                evidenceFromRanks(JfrAnalyticsSupport.topRanks(byStack, top(params)), params.stackIds()).get("top"));
+        List<AnalyticsModels.MetricSeries> series = new ArrayList<>();
+        if (timeseries(params) && grid != null) {
+            int n = grid.bucketCount();
+            int[] counts = BucketAggregators.newCountBuckets(n);
+            double[] sums = BucketAggregators.newSumBuckets(n);
+            double[] max = BucketAggregators.newMaxBuckets(n);
+            for (String typeId : types) {
+                for (var iterable : events.apply(ItemFilters.type(typeId))) {
+                    for (var item : iterable) {
+                        BucketAggregators.addPointSum(
+                                grid,
+                                counts,
+                                sums,
+                                JfrItemAccess.startTimeNs(item),
+                                JfrItemAccess.allocationBytes(item));
+                    }
+                }
+            }
+            series.add(new AnalyticsModels.MetricSeries(
+                    "allocationBytesPerBucket",
+                    "Allocation bytes",
+                    "bytes",
+                    "Bytes allocated in each bucket. Empty buckets are null.",
+                    BucketAggregators.durationSumSeries(grid, counts, sums, max)));
+        }
         return new AnalyticsModels.SubsystemResult(
                 id(),
                 availability,
                 rollup,
-                null,
+                seriesOrNull(timeseries(params), series),
                 evidence,
                 List.of("Correlate allocation spikes with gc pauses."));
     }

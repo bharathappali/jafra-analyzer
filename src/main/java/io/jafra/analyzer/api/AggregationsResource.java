@@ -34,6 +34,7 @@ public class AggregationsResource {
             @QueryParam("limit") Integer limit,
             @QueryParam("minDuration") String minDuration,
             @QueryParam("flavor") String flavor,
+            @QueryParam("stacks") String stacks,
             @QueryParam("last") String last,
             @QueryParam("from") String from,
             @QueryParam("to") String to,
@@ -51,7 +52,8 @@ public class AggregationsResource {
                 after,
                 selected -> {
                     try {
-                        return aggregations.aggregate(selected, kind, limit, minDuration, flavor);
+                        return aggregations.aggregate(
+                                selected, kind, limit, minDuration, flavor, AnalyticsResource.stackIds(stacks));
                     } catch (IllegalArgumentException error) {
                         throw RecordingWindowSelection.badRequest(error.getMessage());
                     } catch (IOException error) {

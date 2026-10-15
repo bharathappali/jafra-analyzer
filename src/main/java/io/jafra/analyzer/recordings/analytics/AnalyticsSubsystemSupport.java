@@ -14,23 +14,37 @@ import io.jafra.analyzer.recordings.JfrItemAccess;
 import io.jafra.analyzer.recordings.TimeBucketGrid;
 
 abstract class AnalyticsSubsystemSupport implements SubsystemBuilder {
-    protected static Map<String, Object> evidenceFromRanks(List<JfrAggregationService.RankedEntry> ranks) {
+    protected static Map<String, Object> evidenceFromRanks(
+            List<JfrAggregationService.RankedEntry> ranks, boolean stackIds) {
         Map<String, Object> evidence = new LinkedHashMap<>();
         List<Map<String, Object>> items = new ArrayList<>();
         for (JfrAggregationService.RankedEntry rank : ranks) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("group", rank.group());
-            row.put("key", rank.key());
-            row.put("count", rank.count());
-            row.put("bytes", rank.bytes());
-            row.put("totalNs", rank.totalNs());
-            if (rank.stack() != null) {
-                row.put("stack", rank.stack());
-            }
-            items.add(row);
+            items.add(stackRow(rank, stackIds));
         }
         evidence.put("top", items);
         return evidence;
+    }
+
+    protected static Map<String, Object> stackRow(JfrAggregationService.RankedEntry rank, boolean stackIds) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("group", rank.group());
+        row.put("key", stackIds && rank.stackId() != null && "stack".equals(rank.group()) ? rank.stackId() : rank.key());
+        row.put("count", rank.count());
+        row.put("bytes", rank.bytes());
+        row.put("totalNs", rank.totalNs());
+        if (!stackIds && rank.stack() != null) {
+            row.put("stack", rank.stack());
+        }
+        if (rank.matchKey() != null) {
+            row.put("matchKey", rank.matchKey());
+        }
+        if (stackIds && rank.stackId() != null) {
+            row.put("stackId", rank.stackId());
+            row.put("leaf", rank.leaf());
+            row.put("topAppFrame", rank.topAppFrame());
+            row.put("depth", rank.depth());
+        }
+        return row;
     }
 
     protected static AnalyticsModels.SubsystemResult absent(String id, List<String> expected) {

@@ -1,6 +1,7 @@
 package io.jafra.analyzer.recordings;
 
 import java.io.IOException;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -48,6 +49,17 @@ public class JfrAggregationService {
     public AggregationDocument aggregate(
             RecordingCatalog.WindowSelection selection, String kind, Integer limit, String minDuration, String flavor)
             throws IOException {
+        return aggregate(selection, kind, limit, minDuration, flavor, false);
+    }
+
+    public AggregationDocument aggregate(
+            RecordingCatalog.WindowSelection selection,
+            String kind,
+            Integer limit,
+            String minDuration,
+            String flavor,
+            boolean stackIds)
+            throws IOException {
         String normalized = kind == null ? "" : kind.trim().toLowerCase(Locale.ROOT);
         if (!KINDS.contains(normalized)) {
             throw new IllegalArgumentException(
@@ -59,10 +71,10 @@ public class JfrAggregationService {
         return switch (normalized) {
             case "gc-pauses" -> gcPauses(selection, events, available);
             case "trends" -> trends(selection, events, available);
-            case "allocations" -> allocations(selection, events, available, top);
-            case "samples" -> samples(selection, events, available, top, flavor);
-            case "contention" -> contention(selection, events, available, top, minDuration);
-            case "exceptions" -> exceptions(selection, events, available, top);
+            case "allocations" -> allocations(selection, events, available, top, stackIds);
+            case "samples" -> samples(selection, events, available, top, flavor, stackIds);
+            case "contention" -> contention(selection, events, available, top, minDuration, stackIds);
+            case "exceptions" -> exceptions(selection, events, available, top, stackIds);
             default -> throw new IllegalArgumentException("unsupported kind: " + kind);
         };
     }
@@ -109,7 +121,8 @@ public class JfrAggregationService {
             RecordingCatalog.WindowSelection selection,
             IItemCollection events,
             Set<String> available,
-            int top) {
+            int top,
+            boolean stackIds) {
         Map<String, MutableRank> byClass = new LinkedHashMap<>();
         Map<String, MutableRank> byStack = new LinkedHashMap<>();
         long eventCount = 0L;
@@ -122,17 +135,18 @@ public class JfrAggregationService {
                     if (clazz == null) {
                         clazz = "(unknown)";
                     }
-                    bump(byClass, "class", clazz, null, bytes, 0L);
+                    bump(byClass, "class", clazz, null, null, bytes, 0L);
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                     String stack = JfrItemAccess.stackTrace(item);
-                    if (stack != null) {
-                        bump(byStack, "stack", stack, stack, bytes, 0L);
+                    if (identity != null && stack != null) {
+                        bump(byStack, "stack", stack, stack, identity, bytes, 0L);
                     }
                 }
             }
         }
         List<RankedEntry> ranked = new ArrayList<>();
-        ranked.addAll(topEntries(byClass, top));
-        ranked.addAll(topEntries(byStack, top));
+        ranked.addAll(topEntries(byClass, top, stackIds));
+        ranked.addAll(topEntries(byStack, top, stackIds));
         Map<String, Object> stats = Map.of("eventCount", eventCount);
         return new AggregationDocument(AnalysisEnvelope.from(selection), "allocations", stats, List.of(), ranked);
     }
@@ -142,7 +156,8 @@ public class JfrAggregationService {
             IItemCollection events,
             Set<String> available,
             int top,
-            String flavor) {
+            String flavor,
+            boolean stackIds) {
         String mode = flavor == null || flavor.isBlank() ? "all" : flavor.trim().toLowerCase(Locale.ROOT);
         List<String> types = sampleTypes(mode, available);
         Map<String, MutableRank> byStack = new LinkedHashMap<>();
@@ -151,15 +166,16 @@ public class JfrAggregationService {
             for (IItemIterable iterable : events.apply(ItemFilters.type(typeId))) {
                 for (IItem item : iterable) {
                     total++;
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                     String stack = JfrItemAccess.stackTrace(item);
-                    if (stack == null) {
+                    if (identity == null || stack == null) {
                         continue;
                     }
-                    bump(byStack, "stack", stack, stack, 0L, 0L);
+                    bump(byStack, "stack", stack, stack, identity, 0L, 0L);
                 }
             }
         }
-        List<RankedEntry> ranked = topEntries(byStack, top);
+        List<RankedEntry> ranked = topEntries(byStack, top, stackIds);
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("sampleCount", total);
         stats.put("flavor", mode);
@@ -171,7 +187,8 @@ public class JfrAggregationService {
             IItemCollection events,
             Set<String> available,
             int top,
-            String minDuration) {
+            String minDuration,
+            boolean stackIds) {
         Long minNs = JfrDuration.parseNanos(minDuration);
         if (minNs == null) {
             minNs = DEFAULT_CONTENTION_MIN_NS;
@@ -190,12 +207,13 @@ public class JfrAggregationService {
                     if (monitor == null) {
                         monitor = typeId;
                     }
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                     String stack = JfrItemAccess.stackTrace(item);
-                    bump(byMonitor, "monitor", monitor, stack, 0L, duration);
+                    bump(byMonitor, "monitor", monitor, stack, identity, 0L, duration);
                 }
             }
         }
-        List<RankedEntry> ranked = topEntries(byMonitor, top);
+        List<RankedEntry> ranked = topEntries(byMonitor, top, stackIds);
         Map<String, Object> stats = Map.of("eventCount", eventCount, "minDurationNs", minNs);
         return new AggregationDocument(AnalysisEnvelope.from(selection), "contention", stats, List.of(), ranked);
     }
@@ -204,7 +222,8 @@ public class JfrAggregationService {
             RecordingCatalog.WindowSelection selection,
             IItemCollection events,
             Set<String> available,
-            int top) {
+            int top,
+            boolean stackIds) {
         Map<String, MutableRank> byClass = new LinkedHashMap<>();
         Map<String, MutableRank> byStack = new LinkedHashMap<>();
         long eventCount = 0L;
@@ -216,17 +235,18 @@ public class JfrAggregationService {
                     if (clazz == null) {
                         clazz = "(unknown)";
                     }
-                    bump(byClass, "class", clazz, null, 0L, 0L);
+                    bump(byClass, "class", clazz, null, null, 0L, 0L);
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                     String stack = JfrItemAccess.stackTrace(item);
-                    if (stack != null) {
-                        bump(byStack, "stack", stack, stack, 0L, 0L);
+                    if (identity != null && stack != null) {
+                        bump(byStack, "stack", stack, stack, identity, 0L, 0L);
                     }
                 }
             }
         }
         List<RankedEntry> ranked = new ArrayList<>();
-        ranked.addAll(topEntries(byClass, top));
-        ranked.addAll(topEntries(byStack, top));
+        ranked.addAll(topEntries(byClass, top, stackIds));
+        ranked.addAll(topEntries(byStack, top, stackIds));
         Map<String, Object> stats = Map.of("eventCount", eventCount);
         return new AggregationDocument(AnalysisEnvelope.from(selection), "exceptions", stats, List.of(), ranked);
     }
@@ -301,24 +321,30 @@ public class JfrAggregationService {
             String group,
             String key,
             String stack,
+            StackIds.Identity identity,
             long bytes,
             long durationNs) {
-        MutableRank rank = ranks.computeIfAbsent(group + "\0" + key, ignored -> new MutableRank(group, key, stack));
+        String mergeKey = identity == null ? key : identity.stackId();
+        MutableRank rank = ranks.computeIfAbsent(
+                group + "\0" + mergeKey, ignored -> new MutableRank(group, key, stack, identity));
         rank.count++;
         rank.bytes += bytes;
         rank.totalNs += durationNs;
         if (rank.stack == null && stack != null) {
             rank.stack = stack;
         }
+        if (rank.identity == null && identity != null) {
+            rank.identity = identity;
+        }
     }
 
-    private static List<RankedEntry> topEntries(Map<String, MutableRank> ranks, int top) {
+    private static List<RankedEntry> topEntries(Map<String, MutableRank> ranks, int top, boolean stackIds) {
         List<MutableRank> sorted = new ArrayList<>(ranks.values());
         sorted.sort(Comparator.comparingLong((MutableRank rank) -> rank.bytes + rank.count + rank.totalNs)
                 .reversed());
         List<RankedEntry> entries = new ArrayList<>();
         for (int index = 0; index < sorted.size() && index < top; index++) {
-            entries.add(sorted.get(index).toEntry());
+            entries.add(sorted.get(index).toEntry(stackIds));
         }
         return entries;
     }
@@ -340,18 +366,36 @@ public class JfrAggregationService {
         final String group;
         final String key;
         String stack;
+        StackIds.Identity identity;
         long count;
         long bytes;
         long totalNs;
 
-        MutableRank(String group, String key, String stack) {
+        MutableRank(String group, String key, String stack, StackIds.Identity identity) {
             this.group = group;
             this.key = key;
             this.stack = stack;
+            this.identity = identity;
         }
 
-        RankedEntry toEntry() {
-            return new RankedEntry(group, key, stack, count, bytes, totalNs);
+        RankedEntry toEntry(boolean stackIds) {
+            String shownKey = key;
+            String shownStack = stack;
+            String stackId = null;
+            String leaf = null;
+            String topApp = null;
+            Integer depth = null;
+            if (stackIds && identity != null) {
+                shownStack = null;
+                if ("stack".equals(group)) {
+                    shownKey = identity.stackId();
+                }
+                stackId = identity.stackId();
+                leaf = identity.leaf();
+                topApp = identity.topAppFrame();
+                depth = identity.depth();
+            }
+            return new RankedEntry(group, shownKey, shownStack, count, bytes, totalNs, stackId, leaf, topApp, depth, null);
         }
     }
 
@@ -370,5 +414,16 @@ public class JfrAggregationService {
     public record TrendPoint(long timeNs, long value) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record RankedEntry(String group, String key, String stack, long count, long bytes, long totalNs) {}
+    public record RankedEntry(
+            String group,
+            String key,
+            String stack,
+            long count,
+            long bytes,
+            long totalNs,
+            String stackId,
+            String leaf,
+            String topAppFrame,
+            Integer depth,
+            String matchKey) {}
 }

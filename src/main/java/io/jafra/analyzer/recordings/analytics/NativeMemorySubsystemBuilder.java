@@ -12,6 +12,7 @@ import org.openjdk.jmc.common.item.ItemFilters;
 
 import io.jafra.analyzer.recordings.JfrAnalyticsSupport;
 import io.jafra.analyzer.recordings.JfrItemAccess;
+import io.jafra.analyzer.recordings.StackIds;
 import io.jafra.analyzer.recordings.TimeBucketGrid;
 
 final class NativeMemorySubsystemBuilder extends AnalyticsSubsystemSupport {
@@ -42,9 +43,10 @@ final class NativeMemorySubsystemBuilder extends AnalyticsSubsystemSupport {
                 for (IItem item : iterable) {
                     long size = readQuantityBytes(item, "size");
                     mallocBytes += size;
+                    StackIds.Identity identity = JfrItemAccess.stackIdentity(item);
                     String stack = JfrItemAccess.stackTrace(item);
-                    if (stack != null) {
-                        JfrAnalyticsSupport.bump(stacks, "stack", stack, stack, size, 0L);
+                    if (identity != null && stack != null) {
+                        JfrAnalyticsSupport.bump(stacks, "stack", stack, stack, identity, size, 0L);
                     }
                 }
             }
@@ -61,7 +63,7 @@ final class NativeMemorySubsystemBuilder extends AnalyticsSubsystemSupport {
                 availability,
                 rollup,
                 null,
-                evidenceFromRanks(JfrAnalyticsSupport.topRanks(stacks, top(params))),
+                evidenceFromRanks(JfrAnalyticsSupport.topRanks(stacks, top(params)), params.stackIds()),
                 List.of("High free churn may include profiler hook overhead."));
     }
 }

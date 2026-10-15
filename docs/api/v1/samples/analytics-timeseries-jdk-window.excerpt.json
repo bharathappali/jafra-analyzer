@@ -385,15 +385,35 @@
       "cpuWallAlloc": []
     },
     "allocVsGc": {
-      "status": "insufficient_data"
+      "status": "insufficient_data",
+      "n": 0
     },
     "jvmVsMachineCpu": {
-      "status": "ok",
-      "note": "See subsystem rollups and series for cpu rollup; cross-align timestamps manually if needed."
+      "status": "insufficient_data",
+      "n": 4
     },
     "throttleVsLatencyProxy": {
-      "status": "ok",
-      "note": "See subsystem rollups and series for container and wall_time; cross-align timestamps manually if needed."
+      "status": "insufficient_data",
+      "n": 0
+    },
+    "contentionVsWall": {
+      "status": "insufficient_data",
+      "n": 0
+    },
+    "compileVsNativeMalloc": {
+      "status": "insufficient_data"
+    },
+    "exceptionsVsGc": {
+      "status": "insufficient_data",
+      "n": 0
+    },
+    "ioVsBlockedThreads": {
+      "status": "insufficient_data",
+      "n": 0
+    },
+    "throttleVsRunnableWithoutCpu": {
+      "status": "insufficient_data",
+      "n": 0
     }
   }
 }

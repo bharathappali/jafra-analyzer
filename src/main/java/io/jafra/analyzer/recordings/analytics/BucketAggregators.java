@@ -155,6 +155,24 @@ public final class BucketAggregators {
         return points;
     }
 
+    public static void addPointSum(TimeBucketGrid grid, int[] counts, double[] sums, long timeNs, double value) {
+        int idx = grid.indexFor(timeNs);
+        if (idx >= 0) {
+            counts[idx]++;
+            sums[idx] += value;
+        }
+    }
+
+    public static List<AnalyticsModels.SeriesPoint> nullableCountSeries(TimeBucketGrid grid, int[] counts) {
+        List<AnalyticsModels.SeriesPoint> points = new ArrayList<>(grid.bucketCount());
+        for (TimeBucketGrid.BucketPoint bucket : grid.isoStarts()) {
+            int i = bucket.index();
+            Number value = counts[i] > 0 ? counts[i] : null;
+            points.add(new AnalyticsModels.SeriesPoint(bucket.at(), value, null, counts[i], null));
+        }
+        return points;
+    }
+
     public static void incrementCount(TimeBucketGrid grid, int[] counts, long timeNs) {
         int idx = grid.indexFor(timeNs);
         if (idx >= 0) {

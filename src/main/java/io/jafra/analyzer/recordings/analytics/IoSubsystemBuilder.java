@@ -46,11 +46,15 @@ final class IoSubsystemBuilder extends AnalyticsSubsystemSupport {
         }
         Map<String, Object> rollup = new LinkedHashMap<>();
         List<Map<String, Object>> topTargets = new ArrayList<>();
+        int n = grid == null ? 0 : grid.bucketCount();
+        int[] durationCounts = timeseries(params) && grid != null ? BucketAggregators.newCountBuckets(n) : null;
+        double[] durationSum = durationCounts == null ? null : BucketAggregators.newSumBuckets(n);
+        double[] durationMax = durationCounts == null ? null : BucketAggregators.newMaxBuckets(n);
         for (IoOp op : OPS) {
             if (!available.contains(op.typeId)) {
                 continue;
             }
-            OpAccumulator acc = collect(events, op);
+            OpAccumulator acc = collect(events, op, grid, durationCounts, durationSum, durationMax);
             rollup.put(op.key, acc.toRollup());
             topTargets.addAll(acc.topTargets(op.key));
         }
@@ -76,16 +80,31 @@ final class IoSubsystemBuilder extends AnalyticsSubsystemSupport {
                 rollup.put("containerIoBytesDelta", lastBytes - firstBytes);
             }
         }
+        List<AnalyticsModels.MetricSeries> series = new ArrayList<>();
+        if (durationCounts != null) {
+            series.add(new AnalyticsModels.MetricSeries(
+                    "ioDurationMsPerBucket",
+                    "I/O duration",
+                    "ms",
+                    "File and socket read/write duration overlapping each bucket. Empty buckets are null.",
+                    BucketAggregators.durationSumSeries(grid, durationCounts, durationSum, durationMax)));
+        }
         return new AnalyticsModels.SubsystemResult(
                 id(),
                 availability,
                 rollup,
-                null,
+                seriesOrNull(timeseries(params), series),
                 Map.of(),
                 List.of("File and socket reads and writes are counted separately."));
     }
 
-    private static OpAccumulator collect(IItemCollection events, IoOp op) {
+    private static OpAccumulator collect(
+            IItemCollection events,
+            IoOp op,
+            TimeBucketGrid grid,
+            int[] durationCounts,
+            double[] durationSum,
+            double[] durationMax) {
         OpAccumulator acc = new OpAccumulator(op.read);
         for (IItemIterable iterable : events.apply(ItemFilters.type(op.typeId))) {
             for (IItem item : iterable) {
@@ -93,6 +112,10 @@ final class IoSubsystemBuilder extends AnalyticsSubsystemSupport {
                 double ms = dur == null ? 0.0 : dur / 1_000_000.0;
                 long bytes = readQuantityBytes(item, op.read ? "bytesRead" : "bytesWritten");
                 acc.add(target(item, op.socket), ms, bytes);
+                if (durationCounts != null && ms > 0.0) {
+                    BucketAggregators.addDurationMs(
+                            grid, durationCounts, durationSum, durationMax, JfrItemAccess.startTimeNs(item), ms);
+                }
             }
         }
         return acc;
