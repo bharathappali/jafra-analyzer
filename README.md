@@ -1,7 +1,7 @@
 # Jafra Analyzer
 
 `jafra-analyzer` version `0.0.2` is a Quarkus gRPC receiver. It validates
-chunk streams, persists each accepted chunk on the 5 GiB PVC at
+chunk streams, persists each accepted chunk on the 500 GiB PVC at
 `/var/lib/jafra/analyzer`, and serves automated analysis summaries over HTTP.
 `/report` and `/summary` pass contiguous chunk files to JMC in stitch order.
 There is no second copy of those bytes.
@@ -268,8 +268,8 @@ the same pod UID arrives.
   write a concatenated file. On-demand reports and event summaries can merge
   overlapping rotations for a time window. `/report` uses JMC rules; `/summary`
   returns raw per-event aggregates. It does not upload to S3.
-- The PVC is ReadWriteOnce; a single replica owns the store. Analyzer memory
-is sized for `jfrsync=default` recordings (`-Xmx1024m`, 2Gi limit).
+- The PVC is ReadWriteOnce; a single replica owns the store. Analyzer CPU and
+  memory request and limit are 8 and 8Gi. The JVM heap stays `-Xmx1024m`.
 - Duplicate detection is local to this volume. Replacing the PVC looks like
   a first-time ingest to the analyzer.
 - `quarkus.log.console.json` is ignored unless `quarkus-logging-json` is
