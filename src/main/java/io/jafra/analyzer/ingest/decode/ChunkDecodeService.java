@@ -2,6 +2,7 @@ package io.jafra.analyzer.ingest.decode;
 
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -9,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import io.jafra.analyzer.retention.RetentionLog;
 
 import io.jafra.analyzer.presets.Presets;
 import io.jafra.analyzer.signals.ContainerMath;
@@ -29,73 +32,164 @@ public final class ChunkDecodeService {
     private final ChunkStore store;
     private final IngestCatalog catalog;
     private final Path v2Root;
+    private final RollupJobs rollups;
 
     public ChunkDecodeService(ChunkStore store, IngestCatalog catalog, Path v2Root) {
+        this(store, catalog, v2Root, new RollupJobs());
+    }
+
+    public ChunkDecodeService(ChunkStore store, IngestCatalog catalog, Path v2Root, RollupJobs rollups) {
         this.store = store;
         this.catalog = catalog;
         this.v2Root = v2Root;
+        this.rollups = rollups;
+    }
+
+    public RollupJobs rollups() {
+        return rollups;
+    }
+
+    public void recover() {
+        try {
+            catalog.resetDecoding();
+        } catch (SQLException error) {
+            throw new IllegalStateException("could not reset in-flight decodes", error);
+        }
+    }
+
+    public void enqueue(ChunkMetadata metadata) {
+        try {
+            catalog.enqueue(metadata);
+        } catch (SQLException error) {
+            throw new IllegalStateException("could not enqueue " + (metadata == null ? "chunk" : metadata.chunkId()), error);
+        }
+    }
+
+    public void enqueueStored() {
+        for (ChunkStore.StoredChunk stored : store.storedChunks()) {
+            ChunkMetadata metadata = store.readMeta(stored);
+            if (metadata == null) {
+                continue;
+            }
+            try {
+                catalog.enqueue(metadata);
+            } catch (SQLException error) {
+                throw new IllegalStateException("could not enqueue " + metadata.chunkId(), error);
+            }
+        }
     }
 
     public void backfill() {
-        List<ChunkMetadata> pending = new ArrayList<>();
-        for (ChunkStore.StoredChunk stored : store.storedChunks()) {
-            ChunkMetadata metadata = store.readMeta(stored);
-            if (metadata != null) {
-                pending.add(metadata);
-            }
+        enqueueStored();
+        while (decodeNextAny(Instant.now())) {
+            // claim every chunk that is not done
         }
-        pending.sort(Comparator.comparingLong(ChunkMetadata::chunkStartTimeNs).thenComparingLong(ChunkMetadata::chunkOffset));
-        for (ChunkMetadata metadata : pending) {
-            decode(metadata);
-        }
+        drainRollups();
+    }
+
+    public boolean decodeNext(int lane, int lanes, Instant now) {
+        return decodeClaim(lane, lanes, now, false);
+    }
+
+    public boolean decodeNextAny(Instant now) {
+        return decodeClaim(0, 1, now, true);
     }
 
     public void decode(ChunkMetadata metadata) {
         if (metadata == null) {
             return;
         }
-        synchronized (catalog) {
-            decodeLocked(metadata);
-        }
-    }
-
-    private void decodeLocked(ChunkMetadata metadata) {
         try {
-            if (catalog.isIngested(metadata.chunkId())) {
-                return;
-            }
-            Path payload = store.payloadPath(metadata.chunkId());
-            JfrChunkReader.ReadChunk chunk = JfrChunkReader.read(payload);
-            ingestChunk(metadata, chunk);
+            catalog.enqueue(metadata);
+        } catch (SQLException error) {
+            throw new IllegalStateException("could not enqueue " + metadata.chunkId(), error);
+        }
+        decodeNextAny(Instant.now());
+    }
+
+    private boolean decodeClaim(int lane, int lanes, Instant now, boolean anyLane) {
+        IngestCatalog.Claimed claimed;
+        try {
+            claimed = anyLane ? catalog.claimAny(now) : catalog.claim(lane, lanes, now);
+        } catch (SQLException error) {
+            throw new IllegalStateException("could not claim a chunk", error);
+        }
+        if (claimed == null) {
+            return false;
+        }
+        try {
+            decodeClaimed(claimed);
         } catch (Exception error) {
-            LOG.warnf(error, "decode failed for %s", metadata.chunkId());
+            LOG.warnf(error, "decode failed for %s", claimed.chunkId());
             try {
-                catalog.record(
-                        metadata.chunkId(),
-                        null,
-                        metadata.recordingId(),
-                        metadata.chunkStartTimeNs(),
-                        metadata.chunkStartTimeNs() + metadata.chunkDurationNs(),
-                        "error",
-                        0L,
-                        error.getMessage());
-            } catch (SQLException ignored) {
-                LOG.warnf(ignored, "could not record decode error for %s", metadata.chunkId());
+                catalog.fail(claimed.chunkId(), failureReason(error));
+            } catch (SQLException recordError) {
+                LOG.warnf(recordError, "could not record decode error for %s", claimed.chunkId());
             }
+        }
+        return true;
+    }
+
+    private void decodeClaimed(IngestCatalog.Claimed claimed) throws Exception {
+        ChunkMetadata metadata = store.metadata(claimed.chunkId());
+        if (metadata == null) {
+            throw new java.io.IOException("raw chunk " + claimed.chunkId() + " is missing");
+        }
+        if (catalog.isIngested(metadata.chunkId())) {
+            return;
+        }
+        ingestChunk(metadata, JfrChunkReader.read(store.payloadPath(metadata.chunkId())));
+    }
+
+    public void drainRollups() {
+        try {
+            synchronized (catalog) {
+                rollups.drain(catalog.connection(), v2Root);
+            }
+        } catch (Exception error) {
+            LOG.warnf(error, "rollup refresh failed");
         }
     }
 
-    /** Resolve identity, write tables, and record the chunk. Split out of decodeLocked so tests can feed a ReadChunk. */
+    public int quarantineCount() {
+        try {
+            return catalog.quarantineCount();
+        } catch (SQLException error) {
+            return 0;
+        }
+    }
+
+    public List<IngestCatalog.QuarantineRow> quarantined() {
+        try {
+            return catalog.quarantined();
+        } catch (SQLException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    public List<IngestCatalog.CoverageRow> coverage() {
+        try {
+            return catalog.coverage();
+        } catch (SQLException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    /** Resolve identity, write tables, and record the chunk. Split out so tests can feed a ReadChunk. */
     void ingestChunk(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk) throws Exception {
+        DecodeGate.enter(metadata);
         long tStart = metadata.chunkStartTimeNs() > 0 ? metadata.chunkStartTimeNs() : 0L;
         long tEnd = tStart + Math.max(0L, metadata.chunkDurationNs());
         Resolved resolved = resolve(metadata, chunk, tStart);
+        String retention = RetentionLog.state(
+                v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(), resolved.id);
+        if ("tombstoned".equals(retention) || "deleted".equals(retention)) {
+            catalog.quarantine(metadata.chunkId(), "retention_tombstone");
+            return;
+        }
         long rows = write(metadata, chunk, resolved, tStart);
-        RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(),
-                resolved.id, tStart, tEnd);
-        String hint = hint(chunk);
-        catalog.touchInstance(resolved.id, tEnd, hint);
-        catalog.record(metadata.chunkId(), resolved.id, metadata.recordingId(), tStart, tEnd, "ok", rows, null);
+        catalog.complete(metadata.chunkId(), resolved.id, metadata.recordingId(), tStart, tEnd, rows, chunk.eventsSeen, hint(chunk));
+        rollups.submit(metadata.namespace(), metadata.podName(), metadata.containerName(), resolved.id, tStart, tEnd);
     }
 
     Resolved resolve(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, long tStart) throws SQLException {
@@ -115,47 +209,52 @@ public final class ChunkDecodeService {
             provisional = false;
             adoptRealIdentity(metadata, id, startMs);
         } else {
-            String inherited = inheritAcrossRecordings(metadata, tStart);
-            id = inherited == null ? JvmInstanceIds.provisional(metadata.recordingId()) : inherited;
-            provisional = inherited == null;
+            String inherited = catalog.inheritInstance(metadata.recordingId(), tStart);
+            if (inherited == null) {
+                inherited = catalog.latestRealInstance(
+                        metadata.namespace(), metadata.podName(), metadata.containerName(), metadata.podUid());
+            }
+            if (inherited == null) {
+                id = JvmInstanceIds.provisional(
+                        metadata.namespace(), metadata.podName(), metadata.containerName(), metadata.podUid());
+                provisional = true;
+            } else {
+                id = inherited;
+                provisional = catalog.isProvisional(inherited);
+            }
         }
         IngestCatalog.InstanceState state = catalog.ensureInstance(
-                id, metadata.namespace(), metadata.podName(), metadata.containerName(), metadata.recordingId(), startMs, provisional);
+                id,
+                metadata.namespace(),
+                metadata.podName(),
+                metadata.containerName(),
+                metadata.recordingId(),
+                startMs,
+                provisional,
+                metadata.podUid());
         return new Resolved(id, provisional, state, chunk.jvm);
     }
 
-    /** Same file, then a workload instance whose last chunk still abuts this one. */
-    private String inheritAcrossRecordings(ChunkMetadata metadata, long tStart) throws SQLException {
-        String inherited = catalog.inheritInstance(metadata.recordingId(), tStart);
-        if (inherited != null) {
-            return inherited;
-        }
-        inherited = catalog.inheritStableInstance(
-                metadata.namespace(), metadata.podName(), metadata.containerName(), tStart);
-        if (inherited != null) {
-            return inherited;
-        }
-        return catalog.inheritAnyInstance(metadata.namespace(), metadata.podName(), metadata.containerName(), tStart);
-    }
-
     /**
-     * Chunks that start with this JVM move onto its real id, including ones already written under the previous JVM
-     * or a provisional id. The previous JVM keeps the chunks that started earlier.
+     * Chunks that start with this JVM move onto its real id. The first real id also takes every provisional chunk.
+     * A later JVM start leaves earlier chunks on the previous id.
      */
     private void adoptRealIdentity(ChunkMetadata metadata, String realId, long startMs) throws SQLException {
         long startNs = startMs * 1_000_000L;
+        boolean claimAllProvisionals = !catalog.hasOtherRealInstance(
+                metadata.namespace(), metadata.podName(), metadata.containerName(), realId);
         List<IngestCatalog.Claim> claims = catalog.previewClaims(
-                metadata.namespace(), metadata.podName(), metadata.containerName(), realId, startNs);
+                metadata.namespace(), metadata.podName(), metadata.containerName(), realId, startNs, claimAllProvisionals);
         try {
             for (IngestCatalog.Claim claim : claims) {
                 InstanceFiles.relocate(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(),
                         metadata.containerName(), claim, realId, startNs);
                 if (!claim.emptied()) {
-                    RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(),
-                            metadata.containerName(), claim.fromId(), claim.minStartNs(), claim.maxEndNs());
+                    rollups.submit(metadata.namespace(), metadata.podName(), metadata.containerName(), claim.fromId(),
+                            claim.minStartNs(), claim.maxEndNs());
                 }
-                RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(),
-                        metadata.containerName(), realId, claim.minStartNs(), claim.maxEndNs());
+                rollups.submit(metadata.namespace(), metadata.podName(), metadata.containerName(), realId, claim.minStartNs(),
+                        claim.maxEndNs());
             }
         } catch (Exception error) {
             throw new SQLException("cannot move chunks onto " + realId, error);
@@ -163,7 +262,22 @@ public final class ChunkDecodeService {
         catalog.applyClaims(claims, realId);
     }
 
+    private static String failureReason(Exception error) {
+        String message = error.getClass().getSimpleName();
+        if (error.getMessage() != null && !error.getMessage().isBlank()) {
+            message = message + ": " + error.getMessage();
+        }
+        return message.length() > 500 ? message.substring(0, 500) : message;
+    }
+
     private long write(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, Resolved resolved, long tStart)
+            throws Exception {
+        synchronized (catalog) {
+            return writeLocked(metadata, chunk, resolved, tStart);
+        }
+    }
+
+    private long writeLocked(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, Resolved resolved, long tStart)
             throws Exception {
         long rows = 0L;
         rows += writeInstance(metadata, chunk, resolved, tStart);

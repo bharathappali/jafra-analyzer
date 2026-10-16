@@ -65,27 +65,27 @@ class InstanceIdentityInheritTest {
     }
 
     @Test
-    void restartAfterAGapDoesNotAttachToThePreviousInstance() throws Exception {
+    void aGapWithoutJvmFactsStaysOnTheLiveInstance() throws Exception {
         try (Harness harness = Harness.open()) {
             ChunkDecodeService.Resolved previous = harness.resolve(
                     meta("old", "cluster/pod-uid/auth-cache/profile-0.jfr", T0), withJvm(START_MS, PID), T0);
             harness.catalog.touchInstance(previous.id(), T0 + CHUNK_NS, null);
 
-            long restartAt = T0 + CHUNK_NS + 60_000_000_000L;
-            ChunkMetadata early = meta("early", "cluster/pod-uid/auth-cache/profile-4.jfr", restartAt);
-            ChunkDecodeService.Resolved unknown = harness.resolve(early, new JfrChunkReader.ReadChunk(), restartAt);
-            assertTrue(unknown.provisional());
-            assertNotEquals(previous.id(), unknown.id());
-            harness.catalog.record(early.chunkId(), unknown.id(), early.recordingId(), restartAt, restartAt + CHUNK_NS, "ok", 1L, null);
+            long gapAt = T0 + CHUNK_NS + 60_000_000_000L;
+            ChunkMetadata early = meta("early", "cluster/pod-uid/auth-cache/profile-4.jfr", gapAt);
+            ChunkDecodeService.Resolved unknown = harness.resolve(early, new JfrChunkReader.ReadChunk(), gapAt);
+            assertFalse(unknown.provisional());
+            assertEquals(previous.id(), unknown.id());
+            harness.catalog.record(early.chunkId(), previous.id(), early.recordingId(), gapAt, gapAt + CHUNK_NS, "ok", 1L, null);
 
-            long newStartMs = restartAt / 1_000_000L;
+            long newStartMs = (gapAt + CHUNK_NS) / 1_000_000L;
             ChunkDecodeService.Resolved identified = harness.resolve(
-                    meta("named", "cluster/pod-uid/auth-cache/profile-4.jfr", restartAt + CHUNK_NS),
+                    meta("named", "cluster/pod-uid/auth-cache/profile-5.jfr", newStartMs * 1_000_000L),
                     withJvm(newStartMs, 2L),
-                    restartAt + CHUNK_NS);
+                    newStartMs * 1_000_000L);
 
             assertEquals(expectedRealId(newStartMs, 2L), identified.id());
-            assertEquals(identified.id(), harness.ingestedInstance("early"));
+            assertEquals(previous.id(), harness.ingestedInstance("early"));
             assertEquals(2, identified.state().instanceSeq());
             assertEquals(previous.id(), identified.state().previousInstanceId());
             assertEquals(2, harness.catalog.instances().size());

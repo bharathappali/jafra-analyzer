@@ -44,6 +44,31 @@ class RetentionEngineTest {
     }
 
     @Test
+    void aDecodingChunkIsLeftOnDisk() throws Exception {
+        Path root = Files.createTempDirectory("jafra-retention-decoding");
+        Instant now = Instant.parse("2026-10-15T00:00:00Z");
+        long old = now.minus(Duration.ofHours(49)).getEpochSecond() * 1_000_000_000L;
+        try (IngestCatalog catalog = new IngestCatalog(root.resolve("v2"))) {
+            ChunkStore store = store(root);
+            catalog.ensureInstance("busy", "default", "pod", "app", "rec-busy", old / 1_000_000L, false);
+            catalog.touchInstance("busy", old, "unknown");
+            byte[] payload = new byte[] {1, 2, 3, 4};
+            ChunkMetadata metadata = new ChunkMetadata("chunk-busy", "rec-busy", "c", "default", "uid", "pod", "app", "f.jfr", 0L,
+                    payload.length, "sum", old, 1L);
+            ChunkStore.IncomingWrite incoming = store.beginWrite(metadata.chunkId());
+            incoming.write(payload);
+            store.commit(incoming, metadata);
+            catalog.enqueue(metadata);
+            write(catalog, root.resolve("v2"), "sample", "busy", old);
+            assertTrue(catalog.claimAny(now) != null);
+            RetentionEngine engine = engine(store, catalog, root.resolve("v2"), "delete-after-48h", false);
+            assertEquals(0, engine.sweep(now));
+            assertTrue(Files.exists(RetentionFiles.instanceDir(root.resolve("v2"), "sample", "default", "pod", "app", "busy")));
+            assertEquals(payload.length, store.chunkBytes("chunk-busy"));
+        }
+    }
+
+    @Test
     void neverModeAndALiveClockDeleteNothing() throws Exception {
         Path root = Files.createTempDirectory("jafra-retention-never");
         Instant now = Instant.parse("2026-10-15T00:00:00Z");

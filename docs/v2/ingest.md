@@ -1,12 +1,12 @@
 # v2 ingest (identity, detail tables, compaction)
 
-On each committed chunk, and again at startup for any chunk not already marked ok, the analyzer decodes the payload once with `jdk.jfr.consumer.RecordingFile` and writes zstd Parquet under `jafra.storage.root`:
+On each committed chunk the analyzer inserts a `pending` row. Lane workers claim that row, decode the payload once with `jdk.jfr.consumer.RecordingFile`, and write zstd Parquet under `jafra.storage.root`:
 
 ```text
 v2/<table>/namespace=<ns>/pod=<pod>/container=<c>/jvm_instance_id=<id>/date=<yyyy-mm-dd>/<chunk_id>.parquet
 ```
 
-`v2/catalog.duckdb` holds the `chunk_ingest` manifest. A second delivery of the same chunk id is a no-op when status is `ok`.
+`v2/catalog.duckdb` holds the `chunk_ingest` manifest. Status is `pending`, `decoding`, `done`, `failed`, or `quarantined`. A second delivery of the same chunk id is a no-op when status is `done`. Startup sets every `decoding` row back to `pending`. A `failed` chunk is claimed again after backoff, and the fifth failure is `quarantined`. `GET /v2/decode` lists those rows. `GET /v2/integrity` compares v1 chunk coverage with v2.
 
 ## JVM instance
 
@@ -14,9 +14,9 @@ v2/<table>/namespace=<ns>/pod=<pod>/container=<c>/jvm_instance_id=<id>/date=<yyy
 
 `namespace|pod_name|container_name|pod_uid|jvmStartTimeMillis|pid`
 
-from `jdk.JVMInformation`. If that event is missing, the chunk inherits an ok chunk of the same `recording_id`. One file is one JVM, so a later chunk still belongs to that instance when it starts inside an earlier chunk's declared window. A recording that already has both a real id and a provisional id prefers the real one. When this file has no earlier chunk, it inherits the newest real instance for the same namespace, pod, and container whose last chunk ended within 15 seconds of this chunk, and otherwise a provisional instance that still abuts this chunk the same way. A new provisional id (`provisional|<recording_id>`) is minted only when none of those exist. A rotated `profile-N.jfr` that continues the recording stays on the JVM that already identified itself. A chunk that starts later than that 15 second slack is a new JVM and does not attach to the previous one.
+from `jdk.JVMInformation`. If that event is missing, the chunk inherits a done chunk of the same `recording_id`, including one whose start sits inside an earlier chunk's declared window. When this file has no earlier chunk, it inherits the newest real instance for the same namespace, pod, container, and pod UID, with no time-gap check. A rotated `profile-N.jfr` from that JVM stays on it. A provisional id is per pod UID and is used only when no real instance exists yet. A new JVM start time or a new PID starts a new instance. An instance ends when the pod is gone or the JVM start time changes, not because a later chunk arrived after a gap.
 
-When a chunk carries `JVMInformation`, every already ingested chunk of that workload whose start is at or after that JVM start (1 second of slack) moves onto the real id. `chunk_ingest` is rewritten, provisional `jvm_instance_state` rows that lose every chunk are deleted, and the Parquet files move with the `jvm_instance_id` column rewritten. Chunks that started earlier stay on the previous JVM, and that JVM's `last_t_ns` is recomputed from the chunks it still has. Rollups for the moved minutes are rebuilt from the raw rows.
+When a chunk carries `JVMInformation`, the first real id for that pod also takes every provisional chunk. A later JVM start takes chunks whose start is at or after that JVM start (1 second of slack). `chunk_ingest` is rewritten, provisional `jvm_instance_state` rows that lose every chunk are deleted, and the Parquet files move with the `jvm_instance_id` column rewritten. Chunks that started earlier stay on the previous JVM, and that JVM's `last_t_ns` is recomputed from the chunks it still has. Rollups for the moved minutes are rebuilt from the raw rows.
 
 `instance_seq` counts JVM starts for the same namespace, pod, and container. The next sequence follows the highest `instance_seq`, then the latest `last_t_ns`. A sequence above 1 writes a `jvm_restart` marker into both the new instance partition and the previous one. `restart_reason_hint` is `oom_suspected` when the previous instance saw `OutOfMemoryError` or a shutdown reason that says out of memory, otherwise `unknown`.
 
@@ -34,7 +34,7 @@ Markers are written at ingest: `gc_pause` at 20 ms (warn at 100 ms, critical at 
 
 A file older than `jafra.compact.min-age` (default 1 hour, by modification time) is merged into `hour-yyyyMMddHH.parquet` in the same partition. The sweep runs every `jafra.compact.interval` (default 10 minutes). `stack` and `frame` hour files drop exact duplicate rows.
 
-Decode runs on a pool of `jafra.decode.threads` (default 4). Catalog writes are serialized on the DuckDB file.
+Decode runs on `jafra.decode.lanes` single-threaded lanes (default 4). The lane is a hash of namespace, pod, container, and recording path, so one recording stays in order and one stuck recording does not block another pod. Catalog claim and the final `done` transaction are the shared critical section. Rollups run after `done`, on a separate job. Parquet is written to a temp file, fsynced, and renamed onto `<chunk_id>.parquet`.
 
 ## Heap pictures
 

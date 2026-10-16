@@ -20,6 +20,11 @@ public final class JvmInstanceIds {
         return first16("provisional|" + value(recordingId));
     }
 
+    /** One provisional id per pod UID until jdk.JVMInformation arrives. */
+    public static String provisional(String namespace, String podName, String containerName, String podUid) {
+        return first16("provisional|" + value(namespace) + '|' + value(podName) + '|' + value(containerName) + '|' + value(podUid));
+    }
+
     private static String first16(String material) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(material.getBytes(StandardCharsets.UTF_8));

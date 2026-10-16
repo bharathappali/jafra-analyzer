@@ -87,6 +87,9 @@ public final class RetentionEngine {
             if ("summary_only".equals(state) && !clearCache) {
                 continue;
             }
+            if (catalog.isDecodingPod(instance.namespace(), instance.pod(), instance.container())) {
+                continue;
+            }
             apply(clearCache ? "clear-cache" : "purge-raw", instance.namespace(), instance.pod(), instance.container(), instance.id(),
                     false, now);
             changed++;
@@ -111,6 +114,10 @@ public final class RetentionEngine {
         body.put("bytes", sizes);
         body.put("raw_bytes", raw);
         if (dryRun) {
+            return body;
+        }
+        if (catalog.isDecodingPod(ns, pod, container)) {
+            body.put("skipped", "decoding");
             return body;
         }
         long removed = raw;

@@ -1,7 +1,11 @@
 package io.jafra.analyzer.ingest.decode;
 
+import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -9,9 +13,13 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.function.Consumer;
 
 /** Writes one zstd Parquet file for a chunk under the hive partition layout. */
 public final class ParquetTables {
+    /** Test hook after the temp file is durable and before it replaces the chunk file. */
+    public static volatile Consumer<Path> beforeRename;
+
     private ParquetTables() {}
 
     public static Path partitionFile(
@@ -52,10 +60,53 @@ public final class ParquetTables {
                 insert.executeBatch();
             }
         }
-        String path = file.toAbsolutePath().toString().replace("'", "''");
+        Path tempFile = file.resolveSibling(file.getFileName().toString() + ".tmp");
+        String path = tempFile.toAbsolutePath().toString().replace("'", "''");
         try (Statement statement = connection.createStatement()) {
-            statement.execute("COPY " + temp + " TO '" + path + "' (FORMAT parquet, COMPRESSION zstd)");
-            statement.execute("DROP TABLE IF EXISTS " + temp);
+            try {
+                statement.execute("COPY " + temp + " TO '" + path + "' (FORMAT parquet, COMPRESSION zstd)");
+            } finally {
+                statement.execute("DROP TABLE IF EXISTS " + temp);
+            }
+        }
+        try (FileChannel channel = FileChannel.open(tempFile, StandardOpenOption.WRITE)) {
+            channel.force(true);
+        } catch (IOException error) {
+            deleteQuietly(tempFile);
+            throw new SQLException("could not fsync " + tempFile, error);
+        }
+        Consumer<Path> hook = beforeRename;
+        if (hook != null) {
+            hook.accept(tempFile);
+        }
+        try {
+            Files.move(tempFile, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            fsyncDirectory(file.getParent());
+        } catch (IOException error) {
+            deleteQuietly(tempFile);
+            throw new SQLException("could not publish " + file, error);
+        }
+    }
+
+    private static void fsyncDirectory(Path directory) throws IOException {
+        if (directory == null) {
+            return;
+        }
+        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
+            channel.force(true);
+        } catch (IOException error) {
+            if (error instanceof java.nio.file.AccessDeniedException || error.getMessage() != null && error.getMessage().contains("Is a directory")) {
+                return;
+            }
+            throw error;
+        }
+    }
+
+    private static void deleteQuietly(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+            // the next retry overwrites the same temp name
         }
     }
 

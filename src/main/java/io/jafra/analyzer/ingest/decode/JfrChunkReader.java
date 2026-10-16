@@ -37,6 +37,7 @@ public final class JfrChunkReader {
         String type = event.getEventType().getName();
         long t = epochNs(event.getStartTime());
         chunk.seen.add(type);
+        chunk.eventsSeen++;
         switch (type) {
             case "jdk.JVMInformation" -> chunk.jvm = jvm(event);
             case "jdk.ActiveSetting" -> {
@@ -344,6 +345,7 @@ public final class JfrChunkReader {
 
     public static final class ReadChunk {
         JvmFacts jvm;
+        int eventsSeen;
         ContainerFacts container;
         GcConfig gcConfig;
         final Set<String> seen = new LinkedHashSet<>();

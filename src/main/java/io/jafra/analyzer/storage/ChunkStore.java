@@ -201,6 +201,19 @@ public class ChunkStore {
         return bytes;
     }
 
+    public ChunkMetadata metadata(String chunkId) {
+        ChunkMetadata cached = committed.get(chunkId);
+        if (cached != null) {
+            return cached;
+        }
+        for (StoredChunk stored : storedChunks()) {
+            if (chunkId.equals(stored.parsed().chunkId())) {
+                return readMeta(stored);
+            }
+        }
+        return null;
+    }
+
     public Path payloadPath(String chunkId) {
         Path known = payloadPaths.get(chunkId);
         if (known != null) {

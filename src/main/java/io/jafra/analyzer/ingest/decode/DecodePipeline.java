@@ -4,7 +4,6 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,6 +18,8 @@ import org.jboss.logging.Logger;
 import io.jafra.analyzer.retention.RetentionEngine;
 import io.jafra.analyzer.storage.ChunkMetadata;
 import io.jafra.analyzer.storage.ChunkStore;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.quarkus.runtime.Startup;
 import io.quarkus.runtime.StartupEvent;
 
@@ -29,18 +30,19 @@ public class DecodePipeline {
     private static final Logger LOG = Logger.getLogger(DecodePipeline.class);
 
     private final ChunkDecodeService decoder;
-    private final ExecutorService executor;
     private final ScheduledExecutorService compactor;
     private final Duration compactInterval;
     private final Duration compactMinAge;
     private final RetentionEngine retention;
     private final Duration retentionInterval;
+    private final int lanes;
 
     @Inject
     public DecodePipeline(
             ChunkStore store,
+            MeterRegistry meterRegistry,
             @ConfigProperty(name = "jafra.storage.root", defaultValue = "/var/lib/jafra/analyzer") String root,
-            @ConfigProperty(name = "jafra.decode.threads", defaultValue = "4") int threads,
+            @ConfigProperty(name = "jafra.decode.lanes", defaultValue = "4") int lanes,
             @ConfigProperty(name = "jafra.compact.interval", defaultValue = "10m") String compactInterval,
             @ConfigProperty(name = "jafra.compact.min-age", defaultValue = "1h") String compactMinAge,
             @ConfigProperty(name = "jafra.retention.mode", defaultValue = "delete-after-48h") String retentionMode,
@@ -50,16 +52,23 @@ public class DecodePipeline {
         Path v2 = Path.of(root).resolve("v2");
         IngestCatalog catalog = new IngestCatalog(v2);
         this.decoder = new ChunkDecodeService(store, catalog, v2);
+        this.decoder.recover();
+        this.lanes = Math.max(1, lanes);
         this.compactInterval = parseDuration(compactInterval);
         this.compactMinAge = parseDuration(compactMinAge);
         this.retentionInterval = parseDuration(sweepInterval);
         this.retention = new RetentionEngine(store, catalog, v2, retentionMode, parseDuration(rawTtl), clearCache, retentionInterval);
-        int pool = Math.max(1, Math.min(threads, Runtime.getRuntime().availableProcessors()));
-        this.executor = Executors.newFixedThreadPool(pool, runnable -> {
-            Thread thread = new Thread(runnable, "jafra-decode");
+        Gauge.builder("jafra_analyzer_decode_quarantine", this.decoder, service -> (double) service.quarantineCount())
+                .register(meterRegistry);
+        for (int lane = 0; lane < this.lanes; lane++) {
+            int index = lane;
+            Thread thread = new Thread(() -> runLane(index), "jafra-decode-" + lane);
             thread.setDaemon(true);
-            return thread;
-        });
+            thread.start();
+        }
+        Thread rollups = new Thread(this::runRollups, "jafra-rollup");
+        rollups.setDaemon(true);
+        rollups.start();
         this.compactor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "jafra-compact");
             thread.setDaemon(true);
@@ -68,8 +77,16 @@ public class DecodePipeline {
         store.onCommit(this::onCommit);
     }
 
+    public ChunkDecodeService decoder() {
+        return decoder;
+    }
+
     void onStart(@Observes StartupEvent event) {
-        executor.submit(this::backfillQuietly);
+        try {
+            decoder.enqueueStored();
+        } catch (RuntimeException error) {
+            LOG.warn("decode enqueue failed", error);
+        }
         long intervalMs = Math.max(1L, compactInterval.toMillis());
         compactor.scheduleWithFixedDelay(this::compactQuietly, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
         long sweepMs = Math.max(1L, retentionInterval.toMillis());
@@ -86,14 +103,42 @@ public class DecodePipeline {
     }
 
     void onCommit(ChunkMetadata metadata) {
-        executor.submit(() -> decoder.decode(metadata));
+        try {
+            decoder.enqueue(metadata);
+        } catch (RuntimeException error) {
+            LOG.warnf(error, "could not enqueue %s", metadata == null ? "chunk" : metadata.chunkId());
+        }
     }
 
-    private void backfillQuietly() {
-        try {
-            decoder.backfill();
-        } catch (RuntimeException error) {
-            LOG.warn("decode backfill failed", error);
+    private void runLane(int lane) {
+        while (!Thread.currentThread().isInterrupted()) {
+            boolean worked;
+            try {
+                worked = decoder.decodeNext(lane, lanes, Instant.now());
+            } catch (RuntimeException error) {
+                LOG.warn("decode lane failed", error);
+                worked = false;
+            }
+            if (!worked) {
+                try {
+                    Thread.sleep(200L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    private void runRollups() {
+        while (!Thread.currentThread().isInterrupted()) {
+            decoder.drainRollups();
+            try {
+                Thread.sleep(1_000L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 

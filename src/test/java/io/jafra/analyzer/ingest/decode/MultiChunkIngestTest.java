@@ -62,7 +62,7 @@ class MultiChunkIngestTest {
 
     private static long okChunks(IngestCatalog catalog) throws Exception {
         try (Statement st = catalog.connection().createStatement();
-                ResultSet r = st.executeQuery("SELECT count(*) FROM chunk_ingest WHERE status='ok'")) {
+                ResultSet r = st.executeQuery("SELECT count(*) FROM chunk_ingest WHERE status IN ('ok', 'done')")) {
             r.next();
             return r.getLong(1);
         }
@@ -109,6 +109,42 @@ class MultiChunkIngestTest {
             long[] range = instanceTimeRange(v2);
             assertTrue(range[1] - range[0] >= 25 * SEC,
                     "instance window should span the sub-chunks but was span=" + (range[1] - range[0]));
+        }
+    }
+
+    @Test
+    void rotatedFileWithALongHeaderStaysOnTheSameJvm() throws Exception {
+        Path root = Files.createTempDirectory("jafra-multichunk-rotate");
+        Path v2 = root.resolve("v2");
+        try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            ChunkDecodeService service = new ChunkDecodeService(new ChunkStore(root), catalog, v2);
+            JfrChunkReader.ReadChunk first = new JfrChunkReader.ReadChunk();
+            first.jvm = new JfrChunkReader.JvmFacts("21.0.12", "HotSpot", START_MS, 1L);
+            first.gauges.add(new JfrChunkReader.GaugePoint(T0 + SEC, "cpu.jvm_user", 0.5));
+            service.ingestChunk(new ChunkMetadata("chunk-0", "cluster/pod-uid/app/profile-0.jfr", "cluster", "ns", "pod-uid",
+                    "app", "app", "profile-0.jfr", 0, 216111, "sum", T0, 60 * SEC), first);
+            long last = T0;
+            for (int i = 1; i <= 3; i++) {
+                last = T0 + i * 5 * SEC;
+                JfrChunkReader.ReadChunk chunk = new JfrChunkReader.ReadChunk();
+                chunk.gauges.add(new JfrChunkReader.GaugePoint(last + SEC, "cpu.jvm_user", 0.6));
+                service.ingestChunk(new ChunkMetadata("chunk-" + i, "cluster/pod-uid/app/profile-1.jfr", "cluster", "ns", "pod-uid",
+                        "app", "app", "profile-1.jfr", i, 30000, "sum", last, 5 * SEC), chunk);
+            }
+            JfrChunkReader.ReadChunk other = new JfrChunkReader.ReadChunk();
+            other.jvm = new JfrChunkReader.JvmFacts("21.0.12", "HotSpot", START_MS, 9L);
+            other.gauges.add(new JfrChunkReader.GaugePoint(T0 + SEC, "cpu.jvm_user", 0.1));
+            service.ingestChunk(new ChunkMetadata("chunk-other", "cluster/other-uid/other/profile-0.jfr", "cluster", "ns",
+                    "other-uid", "other", "other", "profile-0.jfr", 0, 1, "sum", T0, 5 * SEC), other);
+
+            assertEquals(5, okChunks(catalog));
+            assertEquals(2, catalog.instances().size());
+            long lastT = catalog.instances().stream()
+                    .filter(instance -> "app".equals(instance.pod()))
+                    .mapToLong(IngestCatalog.ListedInstance::lastTNs)
+                    .findFirst()
+                    .orElse(0L);
+            assertTrue(lastT >= last + 5 * SEC, "instance to should reach the last rotated chunk, was " + lastT);
         }
     }
 }
