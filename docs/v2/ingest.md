@@ -14,9 +14,11 @@ v2/<table>/namespace=<ns>/pod=<pod>/container=<c>/jvm_instance_id=<id>/date=<yyy
 
 `namespace|pod_name|container_name|pod_uid|jvmStartTimeMillis|pid`
 
-from `jdk.JVMInformation`. If that event is missing, the chunk inherits the id of the latest ok chunk with the same `recording_id` whose end is at or before this chunk. Otherwise the id is provisional (`provisional|<recording_id>`). A later chunk that does carry `JVMInformation` rewrites the manifest id. The earlier Parquet files stay in the provisional partition until a later compaction.
+from `jdk.JVMInformation`. If that event is missing, the chunk inherits the latest ok chunk with the same `recording_id` whose end is at or before this chunk. When this file has no earlier chunk, it inherits the newest real instance for the same namespace, pod, and container whose last chunk ended within 15 seconds of this chunk, and otherwise a provisional instance that still abuts this chunk the same way. A new provisional id (`provisional|<recording_id>`) is minted only when none of those exist. A rotated `profile-N.jfr` that continues the recording stays on the JVM that already identified itself. A chunk that starts later than that 15 second slack is a new JVM and does not attach to the previous one.
 
-`instance_seq` counts JVM starts for the same namespace, pod, and container. A sequence above 1 writes a `jvm_restart` marker into both the new instance partition and the previous one. `restart_reason_hint` is `oom_suspected` when the previous instance saw `OutOfMemoryError` or a shutdown reason that says out of memory, otherwise `unknown`.
+When a chunk carries `JVMInformation`, every already ingested chunk of that workload whose start is at or after that JVM start (1 second of slack) moves onto the real id. `chunk_ingest` is rewritten, provisional `jvm_instance_state` rows that lose every chunk are deleted, and the Parquet files move with the `jvm_instance_id` column rewritten. Chunks that started earlier stay on the previous JVM, and that JVM's `last_t_ns` is recomputed from the chunks it still has. Rollups for the moved minutes are rebuilt from the raw rows.
+
+`instance_seq` counts JVM starts for the same namespace, pod, and container. The next sequence follows the highest `instance_seq`, then the latest `last_t_ns`. A sequence above 1 writes a `jvm_restart` marker into both the new instance partition and the previous one. `restart_reason_hint` is `oom_suspected` when the previous instance saw `OutOfMemoryError` or a shutdown reason that says out of memory, otherwise `unknown`.
 
 Counter deltas (`counter_delta`) are computed only inside one instance. A cumulative value that drops is skipped.
 

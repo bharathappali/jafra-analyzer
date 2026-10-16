@@ -3,7 +3,9 @@ package io.jafra.analyzer.ingest.decode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -13,6 +15,11 @@ import java.sql.Statement;
 
 /** DuckDB catalog for chunk_ingest, instance sequence, and counter cursors. */
 public final class IngestCatalog implements AutoCloseable {
+    /** A following chunk still belongs to the previous JVM when it starts within this slack of that JVM's last end. */
+    public static final long CONTINUITY_NS = 15_000_000_000L;
+    /** Chunk headers can sit slightly before jdk.JVMInformation's start time. */
+    private static final long CLAIM_SLACK_NS = 1_000_000_000L;
+
     private final Connection connection;
 
     public IngestCatalog(Path v2Root) throws SQLException {
@@ -114,6 +121,127 @@ public final class IngestCatalog implements AutoCloseable {
         }
     }
 
+    /** Newest non-provisional instance whose last chunk still abuts this chunk. */
+    public synchronized String inheritStableInstance(String namespace, String pod, String container, long chunkStartNs)
+            throws SQLException {
+        return inheritWorkload(namespace, pod, container, false, chunkStartNs);
+    }
+
+    /** Newest provisional instance whose last chunk still abuts this chunk. */
+    public synchronized String inheritAnyInstance(String namespace, String pod, String container, long chunkStartNs)
+            throws SQLException {
+        return inheritWorkload(namespace, pod, container, true, chunkStartNs);
+    }
+
+    static boolean continues(long chunkStartNs, long lastTNs) {
+        if (lastTNs <= 0L) {
+            return false;
+        }
+        long delta = chunkStartNs - lastTNs;
+        return delta >= -CONTINUITY_NS && delta <= CONTINUITY_NS;
+    }
+
+    private String inheritWorkload(String namespace, String pod, String container, boolean provisional, long chunkStartNs)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                """
+                SELECT jvm_instance_id, last_t_ns FROM jvm_instance_state
+                WHERE namespace = ? AND pod = ? AND container = ? AND provisional = ?
+                ORDER BY instance_seq DESC, last_t_ns DESC
+                LIMIT 1
+                """)) {
+            statement.setString(1, namespace);
+            statement.setString(2, pod);
+            statement.setString(3, container);
+            statement.setBoolean(4, provisional);
+            try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next() || !continues(chunkStartNs, rows.getLong(2))) {
+                    return null;
+                }
+                return rows.getString(1);
+            }
+        }
+    }
+
+    /**
+     * Chunks on this workload that start with the JVM just identified, and so must leave whatever id they were
+     * written under. Earlier chunks of a previous JVM stay where they are.
+     */
+    public synchronized List<Claim> previewClaims(String namespace, String pod, String container, String realId, long startNs)
+            throws SQLException {
+        Map<String, ClaimBuilder> groups = new LinkedHashMap<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                """
+                SELECT ci.jvm_instance_id, ci.chunk_id, ci.t_start, ci.t_end, s.provisional
+                FROM chunk_ingest ci
+                JOIN jvm_instance_state s ON s.jvm_instance_id = ci.jvm_instance_id
+                WHERE s.namespace = ? AND s.pod = ? AND s.container = ?
+                  AND ci.status = 'ok'
+                  AND ci.jvm_instance_id <> ?
+                  AND ci.t_start >= ?
+                """)) {
+            statement.setString(1, namespace);
+            statement.setString(2, pod);
+            statement.setString(3, container);
+            statement.setString(4, realId);
+            statement.setLong(5, startNs - CLAIM_SLACK_NS);
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    ClaimBuilder group = groups.computeIfAbsent(rows.getString(1), ClaimBuilder::new);
+                    group.provisional = rows.getBoolean(5);
+                    group.chunkIds.add(rows.getString(2));
+                    group.minStart = Math.min(group.minStart, rows.getLong(3));
+                    group.maxEnd = Math.max(group.maxEnd, rows.getLong(4));
+                }
+            }
+        }
+        List<Claim> claims = new ArrayList<>();
+        for (ClaimBuilder group : groups.values()) {
+            boolean emptied = group.provisional && group.chunkIds.size() == countForInstance(group.id);
+            claims.add(new Claim(group.id, group.provisional, emptied, List.copyOf(group.chunkIds), group.minStart, group.maxEnd));
+        }
+        return claims;
+    }
+
+    public synchronized void applyClaims(List<Claim> claims, String realId) throws SQLException {
+        for (Claim claim : claims) {
+            if (claim.emptied()) {
+                rekey(claim.fromId(), realId);
+                continue;
+            }
+            for (String chunkId : claim.chunkIds()) {
+                try (PreparedStatement update = connection.prepareStatement(
+                        "UPDATE chunk_ingest SET jvm_instance_id = ? WHERE chunk_id = ?")) {
+                    update.setString(1, realId);
+                    update.setString(2, chunkId);
+                    update.executeUpdate();
+                }
+            }
+            try (PreparedStatement rewind = connection.prepareStatement(
+                    """
+                    UPDATE jvm_instance_state
+                    SET last_t_ns = COALESCE(
+                        (SELECT max(t_end) FROM chunk_ingest WHERE jvm_instance_id = ? AND status = 'ok'), 0)
+                    WHERE jvm_instance_id = ?
+                    """)) {
+                rewind.setString(1, claim.fromId());
+                rewind.setString(2, claim.fromId());
+                rewind.executeUpdate();
+            }
+        }
+    }
+
+    private int countForInstance(String jvmInstanceId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT count(*) FROM chunk_ingest WHERE jvm_instance_id = ? AND status = 'ok'")) {
+            statement.setString(1, jvmInstanceId);
+            try (ResultSet rows = statement.executeQuery()) {
+                rows.next();
+                return rows.getInt(1);
+            }
+        }
+    }
+
     public synchronized InstanceState ensureInstance(
             String jvmInstanceId,
             String namespace,
@@ -140,7 +268,7 @@ public final class IngestCatalog implements AutoCloseable {
                 SELECT jvm_instance_id, last_t_ns, restart_reason_hint, instance_seq
                 FROM jvm_instance_state
                 WHERE namespace = ? AND pod = ? AND container = ?
-                ORDER BY jvm_start_ms DESC LIMIT 1
+                ORDER BY instance_seq DESC, last_t_ns DESC LIMIT 1
                 """)) {
             previous.setString(1, namespace);
             previous.setString(2, pod);
@@ -234,11 +362,24 @@ public final class IngestCatalog implements AutoCloseable {
     }
 
     public synchronized void rekey(String provisionalId, String realId) throws SQLException {
+        if (provisionalId == null || provisionalId.equals(realId)) {
+            return;
+        }
         try (PreparedStatement ingest = connection.prepareStatement(
                 "UPDATE chunk_ingest SET jvm_instance_id = ? WHERE jvm_instance_id = ?")) {
             ingest.setString(1, realId);
             ingest.setString(2, provisionalId);
             ingest.executeUpdate();
+        }
+        try (PreparedStatement state = connection.prepareStatement(
+                "DELETE FROM jvm_instance_state WHERE jvm_instance_id = ? AND provisional = true")) {
+            state.setString(1, provisionalId);
+            state.executeUpdate();
+        }
+        try (PreparedStatement cursors = connection.prepareStatement(
+                "DELETE FROM counter_cursor WHERE jvm_instance_id = ?")) {
+            cursors.setString(1, provisionalId);
+            cursors.executeUpdate();
         }
     }
 
@@ -308,4 +449,19 @@ public final class IngestCatalog implements AutoCloseable {
     public record CounterCursor(Long lastTNs, Double lastValue) {}
 
     public record ListedInstance(String id, String namespace, String pod, String container, long lastTNs) {}
+
+    public record Claim(
+            String fromId, boolean provisional, boolean emptied, List<String> chunkIds, long minStartNs, long maxEndNs) {}
+
+    private static final class ClaimBuilder {
+        private final String id;
+        private boolean provisional;
+        private final List<String> chunkIds = new ArrayList<>();
+        private long minStart = Long.MAX_VALUE;
+        private long maxEnd = 0L;
+
+        private ClaimBuilder(String id) {
+            this.id = id;
+        }
+    }
 }

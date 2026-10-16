@@ -93,11 +93,12 @@ public final class ChunkDecodeService {
         }
     }
 
-    private Resolved resolve(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, long tStart) throws SQLException {
-        boolean provisional = chunk.jvm == null || chunk.jvm.jvmStartTimeMs() == 0L;
+    Resolved resolve(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, long tStart) throws SQLException {
+        boolean missingJvm = chunk.jvm == null || chunk.jvm.jvmStartTimeMs() == 0L;
         String id;
         long startMs = 0L;
-        if (!provisional) {
+        boolean provisional;
+        if (!missingJvm) {
             startMs = chunk.jvm.jvmStartTimeMs();
             id = JvmInstanceIds.of(
                     metadata.namespace(),
@@ -106,18 +107,55 @@ public final class ChunkDecodeService {
                     metadata.podUid(),
                     startMs,
                     chunk.jvm.pid());
-            String inherited = catalog.inheritInstance(metadata.recordingId(), tStart);
-            if (inherited != null && !inherited.equals(id)) {
-                catalog.rekey(inherited, id);
-            }
+            provisional = false;
+            adoptRealIdentity(metadata, id, startMs);
         } else {
-            String inherited = catalog.inheritInstance(metadata.recordingId(), tStart);
+            String inherited = inheritAcrossRecordings(metadata, tStart);
             id = inherited == null ? JvmInstanceIds.provisional(metadata.recordingId()) : inherited;
             provisional = inherited == null;
         }
         IngestCatalog.InstanceState state = catalog.ensureInstance(
                 id, metadata.namespace(), metadata.podName(), metadata.containerName(), metadata.recordingId(), startMs, provisional);
         return new Resolved(id, provisional, state, chunk.jvm);
+    }
+
+    /** Same file, then a workload instance whose last chunk still abuts this one. */
+    private String inheritAcrossRecordings(ChunkMetadata metadata, long tStart) throws SQLException {
+        String inherited = catalog.inheritInstance(metadata.recordingId(), tStart);
+        if (inherited != null) {
+            return inherited;
+        }
+        inherited = catalog.inheritStableInstance(
+                metadata.namespace(), metadata.podName(), metadata.containerName(), tStart);
+        if (inherited != null) {
+            return inherited;
+        }
+        return catalog.inheritAnyInstance(metadata.namespace(), metadata.podName(), metadata.containerName(), tStart);
+    }
+
+    /**
+     * Chunks that start with this JVM move onto its real id, including ones already written under the previous JVM
+     * or a provisional id. The previous JVM keeps the chunks that started earlier.
+     */
+    private void adoptRealIdentity(ChunkMetadata metadata, String realId, long startMs) throws SQLException {
+        long startNs = startMs * 1_000_000L;
+        List<IngestCatalog.Claim> claims = catalog.previewClaims(
+                metadata.namespace(), metadata.podName(), metadata.containerName(), realId, startNs);
+        try {
+            for (IngestCatalog.Claim claim : claims) {
+                InstanceFiles.relocate(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(),
+                        metadata.containerName(), claim, realId, startNs);
+                if (!claim.emptied()) {
+                    RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(),
+                            metadata.containerName(), claim.fromId(), claim.minStartNs(), claim.maxEndNs());
+                }
+                RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(),
+                        metadata.containerName(), realId, claim.minStartNs(), claim.maxEndNs());
+            }
+        } catch (Exception error) {
+            throw new SQLException("cannot move chunks onto " + realId, error);
+        }
+        catalog.applyClaims(claims, realId);
     }
 
     private long write(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, Resolved resolved, long tStart)
@@ -632,7 +670,7 @@ public final class ChunkDecodeService {
         return Integer.parseInt(matcher.group(1));
     }
 
-    private record Resolved(String id, boolean provisional, IngestCatalog.InstanceState state, JfrChunkReader.JvmFacts facts) {}
+    record Resolved(String id, boolean provisional, IngestCatalog.InstanceState state, JfrChunkReader.JvmFacts facts) {}
 
     private record Derived(
             SignalRegistry.Facts facts, String young, String old, Double cpuLimit, Long cpuRequest, String quality, String qos, Long mem) {}
