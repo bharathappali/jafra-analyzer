@@ -66,15 +66,7 @@ public final class ChunkDecodeService {
             }
             Path payload = store.payloadPath(metadata.chunkId());
             JfrChunkReader.ReadChunk chunk = JfrChunkReader.read(payload);
-            long tStart = metadata.chunkStartTimeNs() > 0 ? metadata.chunkStartTimeNs() : 0L;
-            long tEnd = tStart + Math.max(0L, metadata.chunkDurationNs());
-            Resolved resolved = resolve(metadata, chunk, tStart);
-            long rows = write(metadata, chunk, resolved, tStart);
-            RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(),
-                    resolved.id, tStart, tEnd);
-            String hint = hint(chunk);
-            catalog.touchInstance(resolved.id, tEnd, hint);
-            catalog.record(metadata.chunkId(), resolved.id, metadata.recordingId(), tStart, tEnd, "ok", rows, null);
+            ingestChunk(metadata, chunk);
         } catch (Exception error) {
             LOG.warnf(error, "decode failed for %s", metadata.chunkId());
             try {
@@ -91,6 +83,19 @@ public final class ChunkDecodeService {
                 LOG.warnf(ignored, "could not record decode error for %s", metadata.chunkId());
             }
         }
+    }
+
+    /** Resolve identity, write tables, and record the chunk. Split out of decodeLocked so tests can feed a ReadChunk. */
+    void ingestChunk(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk) throws Exception {
+        long tStart = metadata.chunkStartTimeNs() > 0 ? metadata.chunkStartTimeNs() : 0L;
+        long tEnd = tStart + Math.max(0L, metadata.chunkDurationNs());
+        Resolved resolved = resolve(metadata, chunk, tStart);
+        long rows = write(metadata, chunk, resolved, tStart);
+        RollupWriter.refresh(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(),
+                resolved.id, tStart, tEnd);
+        String hint = hint(chunk);
+        catalog.touchInstance(resolved.id, tEnd, hint);
+        catalog.record(metadata.chunkId(), resolved.id, metadata.recordingId(), tStart, tEnd, "ok", rows, null);
     }
 
     Resolved resolve(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, long tStart) throws SQLException {

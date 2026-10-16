@@ -106,12 +106,22 @@ public final class IngestCatalog implements AutoCloseable {
         }
     }
 
+    /**
+     * Instance already established for this recording. One JFR file is one JVM, so a later chunk belongs to that
+     * instance even when it starts inside an earlier chunk's declared window. Prefer the non-provisional id so a
+     * recording that already has both a real id and phantoms does not keep growing the phantom.
+     */
     public synchronized String inheritInstance(String recordingId, long chunkStartNs) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
                 """
-                SELECT jvm_instance_id FROM chunk_ingest
-                WHERE recording_id = ? AND status = 'ok' AND t_end <= ?
-                ORDER BY t_end DESC LIMIT 1
+                SELECT ci.jvm_instance_id
+                FROM chunk_ingest ci
+                LEFT JOIN jvm_instance_state s ON s.jvm_instance_id = ci.jvm_instance_id
+                WHERE ci.recording_id = ? AND ci.status = 'ok'
+                ORDER BY COALESCE(s.provisional, true) ASC,
+                         CASE WHEN ci.t_start <= ? THEN 0 ELSE 1 END,
+                         ci.t_start DESC, ci.t_end DESC
+                LIMIT 1
                 """)) {
             statement.setString(1, recordingId);
             statement.setLong(2, chunkStartNs);
