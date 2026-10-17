@@ -4,6 +4,7 @@ WORKDIR /workspace
 COPY contracts ./contracts
 COPY jafra-analyzer ./jafra-analyzer
 WORKDIR /workspace/jafra-analyzer
+RUN test -f ../contracts/jafra.proto
 RUN apt-get update && apt-get install -y --no-install-recommends maven \
     && mvn -q -DskipTests package \
     && rm -rf /root/.m2

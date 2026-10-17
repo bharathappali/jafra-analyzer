@@ -69,6 +69,20 @@ class DecodeQueueTest {
         return new ChunkMetadata(chunkId, recording, "cluster", "ns", "uid-" + pod, pod, "app", recording, 0L, 1L, "sum", start, 1_000L);
     }
 
+    @Test
+    void requeueReturnsOneChunkOrEveryQuarantinedChunk() throws Exception {
+        Path v2 = Files.createTempDirectory("jafra-requeue").resolve("v2");
+        try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            catalog.quarantine("chunk-a", "give up");
+            catalog.quarantine("chunk-b", "give up");
+            assertEquals(1, catalog.requeue("chunk-a"));
+            assertEquals("pending", status(catalog, "chunk-a"));
+            assertEquals("quarantined", status(catalog, "chunk-b"));
+            assertEquals(1, catalog.requeueAll());
+            assertEquals("pending", status(catalog, "chunk-b"));
+        }
+    }
+
     private static void commit(ChunkStore store, ChunkMetadata metadata, byte[] payload) throws Exception {
         ChunkStore.IncomingWrite incoming = store.beginWrite(metadata.chunkId());
         incoming.write(payload);

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -63,6 +64,15 @@ class RollupFollowupTest {
             assertEquals("pod-a", catalog.pendingRollups().get(0).pod());
             assertTrue(Files.isDirectory(v2.resolve("rollup_1m")));
         }
+    }
+
+    @Test
+    void adjacentMinutesBecomeOneRangeAndAGapStaysSplit() {
+        long minute = RollupJobs.MINUTE_NS;
+        IngestCatalog.RollupJob first = new IngestCatalog.RollupJob("ns", "pod", "app", "jvm", 0, minute);
+        IngestCatalog.RollupJob second = new IngestCatalog.RollupJob("ns", "pod", "app", "jvm", minute, minute * 2);
+        IngestCatalog.RollupJob later = new IngestCatalog.RollupJob("ns", "pod", "app", "jvm", minute * 3, minute * 4);
+        assertEquals(2, RollupJobs.merge(List.of(later, first, second)).size());
     }
 
     private static void ingest(ChunkDecodeService service, String pod, String chunkId) throws Exception {

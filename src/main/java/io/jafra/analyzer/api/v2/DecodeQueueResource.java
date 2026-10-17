@@ -7,8 +7,10 @@ import java.util.Map;
 
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 
 import io.jafra.analyzer.ingest.decode.DecodePipeline;
@@ -45,6 +47,14 @@ public class DecodeQueueResource {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("quarantined", rows);
+        return body;
+    }
+
+    @POST
+    @Path("decode/requeue")
+    public Map<String, Object> requeue(@QueryParam("chunk_id") String chunkId) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("requeued", pipeline.decoder().requeue(chunkId));
         return body;
     }
 

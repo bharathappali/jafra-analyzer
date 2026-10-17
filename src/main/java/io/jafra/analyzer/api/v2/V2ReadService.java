@@ -1177,11 +1177,15 @@ public final class V2ReadService {
         if (cursor == null || cursor.isBlank()) {
             return new long[] {fromNs - 1, Long.MAX_VALUE};
         }
-        int split = cursor.indexOf('|');
-        if (split < 0) {
-            return new long[] {Long.parseLong(cursor), Long.MAX_VALUE};
+        try {
+            int split = cursor.indexOf('|');
+            if (split < 0) {
+                return new long[] {Long.parseLong(cursor), Long.MAX_VALUE};
+            }
+            return new long[] {Long.parseLong(cursor.substring(0, split)), Long.parseLong(cursor.substring(split + 1))};
+        } catch (NumberFormatException error) {
+            throw new IllegalArgumentException("malformed cursor");
         }
-        return new long[] {Long.parseLong(cursor.substring(0, split)), Long.parseLong(cursor.substring(split + 1))};
     }
 
     private static String eventTable(String type) {

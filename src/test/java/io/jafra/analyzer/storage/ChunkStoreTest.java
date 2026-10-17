@@ -157,6 +157,25 @@ class ChunkStoreTest {
         assertTrue(restarted.contains("chunk-a"));
     }
 
+    @Test
+    void metadataAfterRestartReadsTheIndexedFileAndCachesIt(@TempDir Path root) throws Exception {
+        ChunkStore store = new ChunkStore(root);
+        store.recover();
+        persist(store, metadata("chunk-a", 0, new byte[] {1}), new byte[] {1});
+        persist(store, metadata("chunk-b", 1, new byte[] {2}), new byte[] {2});
+        ChunkStore restarted = new ChunkStore(root);
+        restarted.recover();
+        assertEquals("chunk-a", restarted.metadata("chunk-a").chunkId());
+        Path meta = restarted.storedChunks().stream()
+                .filter(stored -> "chunk-a".equals(stored.parsed().chunkId()))
+                .findFirst()
+                .orElseThrow()
+                .meta();
+        Files.writeString(meta, Files.readString(meta).replace("chunk-a", "rewritten"));
+        assertEquals("chunk-a", restarted.metadata("chunk-a").chunkId());
+        assertEquals("chunk-b", restarted.metadata("chunk-b").chunkId());
+    }
+
     private static List<String> chunkIds(List<Path> paths) {
         return paths.stream()
                 .map(path -> ChunkFileName.parse(path.getFileName().toString()).chunkId())

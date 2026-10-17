@@ -32,6 +32,35 @@ class ChunkFileSafetyTest {
     }
 
     @Test
+    void summaryOnlyStopsADecodeFromCreatingFiles() throws Exception {
+        Path root = Files.createTempDirectory("jafra-summary-decode");
+        Path v2 = root.resolve("v2");
+        try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            ChunkDecodeService service = new ChunkDecodeService(new ChunkStore(root), catalog, v2);
+            service.ingestChunk(meta("first", 1_000L), sample(false));
+            String instance = catalog.instances().get(0).id();
+            RetentionLog.upsert(v2, new RetentionLog.Entry("ns", "pod", "app", instance, "summary_only", 1L, 1L, 0L, 0L, 0L));
+            service.ingestChunk(meta("second", 2_000L), sample(false));
+            assertEquals("quarantined", status(catalog, "second"));
+            assertFalse(exists(v2, "second.parquet"));
+        }
+    }
+
+    @Test
+    void aFailedDecodeDeletesPartialFiles() throws Exception {
+        Path root = Files.createTempDirectory("jafra-fail-files");
+        Path v2 = root.resolve("v2");
+        try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            ChunkDecodeService service = new ChunkDecodeService(new ChunkStore(root), catalog, v2);
+            service.ingestChunk(meta("chunk-partial", 1_000L), sample(true));
+            assertTrue(exists(v2, "chunk-partial.parquet"));
+            catalog.fail("chunk-partial", "reader blew up");
+            assertEquals("failed", status(catalog, "chunk-partial"));
+            assertFalse(exists(v2, "chunk-partial.parquet"));
+        }
+    }
+
+    @Test
     void aRetryDropsTheCopyWrittenUnderThePreviousInstance() throws Exception {
         Path root = Files.createTempDirectory("jafra-chunk-dedupe");
         Path v2 = root.resolve("v2");

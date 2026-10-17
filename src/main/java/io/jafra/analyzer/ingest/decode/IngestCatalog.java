@@ -8,7 +8,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -24,13 +23,14 @@ public final class IngestCatalog implements AutoCloseable {
     private static final long CLAIM_SLACK_NS = 1_000_000_000L;
 
     private final Connection connection;
+    private final Path v2Root;
     private int lanes = 4;
 
     public IngestCatalog(Path v2Root) throws SQLException {
+        this.v2Root = v2Root;
         try {
             Files.createDirectories(v2Root);
-            ensureDriver();
-            connection = DriverManager.getConnection("jdbc:duckdb:" + v2Root.resolve("catalog.duckdb"));
+            connection = DuckConnections.open("jdbc:duckdb:" + v2Root.resolve("catalog.duckdb"));
             try (Statement statement = connection.createStatement()) {
                 statement.execute("""
                         CREATE TABLE IF NOT EXISTS chunk_ingest (
@@ -349,6 +349,25 @@ public final class IngestCatalog implements AutoCloseable {
         return jobs;
     }
 
+    public synchronized void deleteRollups(List<RollupJob> jobs) throws SQLException {
+        if (jobs == null || jobs.isEmpty()) {
+            return;
+        }
+        boolean previous = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            for (RollupJob job : jobs) {
+                deleteRollup(job);
+            }
+            connection.commit();
+        } catch (SQLException error) {
+            connection.rollback();
+            throw error;
+        } finally {
+            connection.setAutoCommit(previous);
+        }
+    }
+
     public synchronized void deleteRollup(RollupJob job) throws SQLException {
         try (PreparedStatement delete = connection.prepareStatement(
                 """
@@ -584,7 +603,88 @@ public final class IngestCatalog implements AutoCloseable {
 
     public synchronized void setLanes(int lanes) throws SQLException {
         this.lanes = Math.max(1, lanes);
+        try (PreparedStatement clear = connection.prepareStatement("UPDATE chunk_ingest SET lane = NULL WHERE lane >= ?")) {
+            clear.setInt(1, this.lanes);
+            clear.executeUpdate();
+        }
         assignLanes();
+    }
+
+    public synchronized void enqueueAll(java.util.Collection<ChunkMetadata> chunks) throws SQLException {
+        if (chunks == null || chunks.isEmpty()) {
+            return;
+        }
+        boolean previous = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            for (ChunkMetadata metadata : chunks) {
+                enqueue(metadata);
+            }
+            connection.commit();
+        } catch (SQLException error) {
+            connection.rollback();
+            throw error;
+        } finally {
+            connection.setAutoCommit(previous);
+        }
+    }
+
+    public synchronized int backlog() throws SQLException {
+        try (Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "SELECT count(*) FROM chunk_ingest WHERE status IN ('pending', 'decoding', 'failed', 'error')")) {
+            rows.next();
+            return rows.getInt(1);
+        }
+    }
+
+    public synchronized boolean hasReadyWork(int lane, Instant now) throws SQLException {
+        long nowNs = now.toEpochMilli() * 1_000_000L;
+        try (PreparedStatement statement = connection.prepareStatement(
+                """
+                WITH ranked AS (
+                  SELECT status, attempts, next_attempt_ns, lane,
+                         ROW_NUMBER() OVER (PARTITION BY namespace, pod, container ORDER BY t_start, chunk_id) AS rn
+                  FROM chunk_ingest
+                  WHERE status IN ('pending', 'decoding', 'failed', 'error')
+                )
+                SELECT 1 FROM ranked
+                WHERE rn = 1
+                  AND status IN ('pending', 'failed', 'error')
+                  AND (status <> 'failed' OR (coalesce(attempts, 0) < ? AND (next_attempt_ns IS NULL OR next_attempt_ns <= ?)))
+                  AND lane = ?
+                LIMIT 1
+                """)) {
+            statement.setInt(1, MAX_ATTEMPTS);
+            statement.setLong(2, nowNs);
+            statement.setInt(3, lane);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next();
+            }
+        }
+    }
+
+    public synchronized int requeue(String chunkId) throws SQLException {
+        try (PreparedStatement update = connection.prepareStatement(
+                """
+                UPDATE chunk_ingest
+                SET status = 'pending', attempts = 0, error = NULL, next_attempt_ns = NULL
+                WHERE status = 'quarantined' AND chunk_id = ?
+                """)) {
+            update.setString(1, chunkId);
+            return update.executeUpdate();
+        }
+    }
+
+    public synchronized int requeueAll() throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            return statement.executeUpdate(
+                    """
+                    UPDATE chunk_ingest
+                    SET status = 'pending', attempts = 0, error = NULL, next_attempt_ns = NULL
+                    WHERE status = 'quarantined'
+                    """);
+        }
     }
 
     public synchronized void enqueue(ChunkMetadata metadata) throws SQLException {
@@ -718,6 +818,11 @@ public final class IngestCatalog implements AutoCloseable {
                     insert.executeUpdate();
                 }
             }
+        }
+        try {
+            InstanceFiles.deleteChunk(v2Root, chunkId);
+        } catch (java.io.IOException error) {
+            throw new SQLException("could not delete partial files for " + chunkId, error);
         }
     }
 

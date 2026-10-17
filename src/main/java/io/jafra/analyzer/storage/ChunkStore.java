@@ -206,12 +206,11 @@ public class ChunkStore {
         if (cached != null) {
             return cached;
         }
-        for (StoredChunk stored : storedChunks()) {
-            if (chunkId.equals(stored.parsed().chunkId())) {
-                return readMeta(stored);
-            }
+        Path meta = metaPaths.get(chunkId);
+        if (meta == null) {
+            return null;
         }
-        return null;
+        return readMetaFile(chunkId, meta);
     }
 
     public Path payloadPath(String chunkId) {
@@ -254,14 +253,23 @@ public class ChunkStore {
         if (stored == null) {
             return null;
         }
-        ChunkMetadata cached = committed.get(stored.parsed().chunkId());
+        String chunkId = stored.parsed().chunkId();
+        ChunkMetadata cached = committed.get(chunkId);
         if (cached != null) {
             return cached;
         }
+        metaPaths.put(chunkId, stored.meta());
+        payloadPaths.putIfAbsent(chunkId, stored.payload());
+        return readMetaFile(chunkId, stored.meta());
+    }
+
+    private ChunkMetadata readMetaFile(String chunkId, Path meta) {
         try {
-            return MAPPER.readValue(stored.meta().toFile(), ChunkMetadata.class);
+            ChunkMetadata metadata = MAPPER.readValue(meta.toFile(), ChunkMetadata.class);
+            absorb(metadata);
+            return metadata;
         } catch (IOException error) {
-            LOG.warnf(error, "skipping unreadable chunk metadata %s", stored.meta());
+            LOG.warnf(error, "skipping unreadable chunk metadata %s", chunkId);
             return null;
         }
     }

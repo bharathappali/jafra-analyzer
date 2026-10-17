@@ -2,7 +2,6 @@ package io.jafra.analyzer.ingest.decode;
 
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -70,16 +69,17 @@ public final class ChunkDecodeService {
     }
 
     public void enqueueStored() {
+        List<ChunkMetadata> batch = new ArrayList<>();
         for (ChunkStore.StoredChunk stored : store.storedChunks()) {
             ChunkMetadata metadata = store.readMeta(stored);
-            if (metadata == null) {
-                continue;
+            if (metadata != null) {
+                batch.add(metadata);
             }
-            try {
-                catalog.enqueue(metadata);
-            } catch (SQLException error) {
-                throw new IllegalStateException("could not enqueue " + metadata.chunkId(), error);
-            }
+        }
+        try {
+            catalog.enqueueAll(batch);
+        } catch (SQLException error) {
+            throw new IllegalStateException("could not enqueue stored chunks", error);
         }
     }
 
@@ -157,11 +157,29 @@ public final class ChunkDecodeService {
         CatalogRepair.repair(catalog, store, v2Root);
     }
 
+    public void setPauseBacklog(int pauseBacklog) {
+        rollups.setPauseBacklog(pauseBacklog);
+    }
+
+    public boolean laneReady(int lane, Instant now) {
+        try {
+            return catalog.hasReadyWork(lane, now);
+        } catch (SQLException error) {
+            return false;
+        }
+    }
+
+    public int requeue(String chunkId) {
+        try {
+            return chunkId == null || chunkId.isBlank() ? catalog.requeueAll() : catalog.requeue(chunkId);
+        } catch (SQLException error) {
+            throw new IllegalStateException("could not requeue quarantined chunks", error);
+        }
+    }
+
     public void drainRollups() {
         try {
-            synchronized (catalog) {
-                rollups.drain(catalog, v2Root);
-            }
+            rollups.drain(catalog, v2Root);
         } catch (Exception error) {
             LOG.warnf(error, "rollup refresh failed");
         }
@@ -221,14 +239,14 @@ public final class ChunkDecodeService {
     private boolean retained(ChunkMetadata metadata, String instanceId) throws java.io.IOException {
         String retention = RetentionLog.state(
                 v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(), instanceId);
-        return "tombstoned".equals(retention) || "deleted".equals(retention);
+        return "tombstoned".equals(retention) || "deleted".equals(retention) || "summary_only".equals(retention);
     }
 
     private Connection writer() throws SQLException {
         Connection current = writers.get();
         if (current == null || current.isClosed()) {
             IngestCatalog.ensureDriver();
-            current = DriverManager.getConnection("jdbc:duckdb:");
+            current = DuckConnections.open("jdbc:duckdb:");
             writers.set(current);
         }
         return current;

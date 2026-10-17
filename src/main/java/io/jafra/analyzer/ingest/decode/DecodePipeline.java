@@ -43,34 +43,32 @@ public class DecodePipeline {
             MeterRegistry meterRegistry,
             @ConfigProperty(name = "jafra.storage.root", defaultValue = "/var/lib/jafra/analyzer") String root,
             @ConfigProperty(name = "jafra.decode.lanes", defaultValue = "4") int lanes,
+            @ConfigProperty(name = "jafra.duckdb.memory-limit", defaultValue = "256MB") String memoryLimit,
+            @ConfigProperty(name = "jafra.duckdb.threads", defaultValue = "1") int duckThreads,
+            @ConfigProperty(name = "jafra.rollup.pause-backlog", defaultValue = "64") int pauseBacklog,
             @ConfigProperty(name = "jafra.compact.interval", defaultValue = "10m") String compactInterval,
             @ConfigProperty(name = "jafra.compact.min-age", defaultValue = "1h") String compactMinAge,
             @ConfigProperty(name = "jafra.retention.mode", defaultValue = "delete-after-48h") String retentionMode,
             @ConfigProperty(name = "jafra.retention.raw-ttl", defaultValue = "48h") String rawTtl,
             @ConfigProperty(name = "jafra.retention.clear-parquet-cache", defaultValue = "false") boolean clearCache,
             @ConfigProperty(name = "jafra.retention.sweep-interval", defaultValue = "10m") String sweepInterval) throws SQLException {
+        DuckConnections.configure(memoryLimit, duckThreads);
         Path v2 = Path.of(root).resolve("v2");
         IngestCatalog catalog = new IngestCatalog(v2);
         this.decoder = new ChunkDecodeService(store, catalog, v2);
         this.lanes = Math.max(1, lanes);
         this.decoder.configureLanes(this.lanes);
-        this.decoder.repair();
+        this.decoder.setPauseBacklog(pauseBacklog);
         this.decoder.recover();
+        Thread startup = new Thread(this::prepareQueue, "jafra-decode-startup");
+        startup.setDaemon(true);
+        startup.start();
         this.compactInterval = parseDuration(compactInterval);
         this.compactMinAge = parseDuration(compactMinAge);
         this.retentionInterval = parseDuration(sweepInterval);
         this.retention = new RetentionEngine(store, catalog, v2, retentionMode, parseDuration(rawTtl), clearCache, retentionInterval);
         Gauge.builder("jafra_analyzer_decode_quarantine", this.decoder, service -> (double) service.quarantineCount())
                 .register(meterRegistry);
-        for (int lane = 0; lane < this.lanes; lane++) {
-            int index = lane;
-            Thread thread = new Thread(() -> runLane(index), "jafra-decode-" + lane);
-            thread.setDaemon(true);
-            thread.start();
-        }
-        Thread rollups = new Thread(this::runRollups, "jafra-rollup");
-        rollups.setDaemon(true);
-        rollups.start();
         this.compactor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "jafra-compact");
             thread.setDaemon(true);
@@ -84,11 +82,6 @@ public class DecodePipeline {
     }
 
     void onStart(@Observes StartupEvent event) {
-        try {
-            decoder.enqueueStored();
-        } catch (RuntimeException error) {
-            LOG.warn("decode enqueue failed", error);
-        }
         long intervalMs = Math.max(1L, compactInterval.toMillis());
         compactor.scheduleWithFixedDelay(this::compactQuietly, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
         long sweepMs = Math.max(1L, retentionInterval.toMillis());
@@ -110,6 +103,24 @@ public class DecodePipeline {
         } catch (RuntimeException error) {
             LOG.warnf(error, "could not enqueue %s", metadata == null ? "chunk" : metadata.chunkId());
         }
+    }
+
+    private void prepareQueue() {
+        try {
+            decoder.repair();
+            decoder.enqueueStored();
+        } catch (RuntimeException error) {
+            LOG.warn("decode startup repair failed", error);
+        }
+        for (int lane = 0; lane < lanes; lane++) {
+            int index = lane;
+            Thread thread = new Thread(() -> runLane(index), "jafra-decode-" + lane);
+            thread.setDaemon(true);
+            thread.start();
+        }
+        Thread rollups = new Thread(this::runRollups, "jafra-rollup");
+        rollups.setDaemon(true);
+        rollups.start();
     }
 
     private void runLane(int lane) {

@@ -3,6 +3,7 @@ package io.jafra.analyzer.api.v2;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
@@ -108,6 +109,7 @@ class V2ReadServiceTest {
             List<Map<String, Object>> rest = (List<Map<String, Object>>) second.get("rows");
             assertEquals(1, rest.size());
             assertEquals("b", rest.get(0).get("target"));
+            assertThrows(IllegalArgumentException.class, () -> service.events(id, range, "compile", null, "not-a-cursor", 1));
         }
     }
 

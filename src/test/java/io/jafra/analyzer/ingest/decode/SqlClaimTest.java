@@ -3,6 +3,7 @@ package io.jafra.analyzer.ingest.decode;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,6 +42,22 @@ class SqlClaimTest {
             assertNotNull(next);
             assertEquals("a-mid", next.chunkId());
             assertEquals("b-early", catalog.claim(DecodeLanes.of("ns", other, "app", lanes), lanes, Instant.now()).chunkId());
+        }
+    }
+
+    @Test
+    void setLanesClearsLanesOutsideTheNewWidth() throws Exception {
+        Path v2 = Files.createTempDirectory("jafra-set-lanes").resolve("v2");
+        try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            catalog.setLanes(8);
+            catalog.enqueue(chunk("wide", "pod-a", 1));
+            catalog.setLanes(2);
+            try (var statement = catalog.connection().prepareStatement("SELECT lane FROM chunk_ingest WHERE chunk_id = 'wide'")) {
+                try (var rows = statement.executeQuery()) {
+                    assertEquals(true, rows.next());
+                    assertTrue(rows.getInt(1) < 2);
+                }
+            }
         }
     }
 

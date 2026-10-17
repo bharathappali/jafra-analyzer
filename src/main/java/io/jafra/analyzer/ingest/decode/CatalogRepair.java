@@ -3,7 +3,6 @@ package io.jafra.analyzer.ingest.decode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -30,7 +29,7 @@ final class CatalogRepair {
             }
             IngestCatalog.ensureDriver();
             List<String> unreadable = new ArrayList<>();
-            try (Connection reader = DriverManager.getConnection("jdbc:duckdb:");
+            try (Connection reader = DuckConnections.open("jdbc:duckdb:");
                     var walk = Files.walk(v2Root)) {
                 for (Path file : walk.filter(Files::isRegularFile).toList()) {
                     String name = file.getFileName().toString();
