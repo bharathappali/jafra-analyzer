@@ -10,13 +10,21 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Consumer;
 
 /** Moves Parquet that was written under the wrong jvm_instance_id onto the id just learned from JVMInformation. */
 final class InstanceFiles {
+    /** Test hook. Callers hold the catalog lock, so a block here stalls other catalog transactions. */
+    public static volatile Consumer<IngestCatalog.Claim> beforeRelocate;
+
     private InstanceFiles() {}
 
     static void relocate(Connection connection, Path v2Root, String namespace, String pod, String container,
             IngestCatalog.Claim claim, String toId, long startNs) throws SQLException, IOException {
+        Consumer<IngestCatalog.Claim> hook = beforeRelocate;
+        if (hook != null) {
+            hook.accept(claim);
+        }
         if (v2Root == null || !Files.isDirectory(v2Root)) {
             return;
         }
@@ -185,5 +193,55 @@ final class InstanceFiles {
 
     private static String escape(String value) {
         return value.replace("'", "''");
+    }
+
+    static void deleteChunk(Path v2Root, String chunkId) throws IOException {
+        if (v2Root == null || !Files.isDirectory(v2Root) || chunkId == null) {
+            return;
+        }
+        String parquet = chunkId + ".parquet";
+        String temp = parquet + ".tmp";
+        try (var walk = Files.walk(v2Root)) {
+            for (Path file : walk.filter(Files::isRegularFile).toList()) {
+                String name = file.getFileName().toString();
+                if (parquet.equals(name) || temp.equals(name)) {
+                    Files.deleteIfExists(file);
+                }
+            }
+        }
+    }
+
+    /** A retry that resolved a different instance must not leave the previous copy of this chunk. */
+    static void dropOtherCopies(Path v2Root, String namespace, String pod, String container, String chunkId, String keepInstance)
+            throws IOException {
+        if (v2Root == null || !Files.isDirectory(v2Root) || chunkId == null) {
+            return;
+        }
+        String keep = "jvm_instance_id=" + ParquetTables.sanitize(keepInstance);
+        String parquet = chunkId + ".parquet";
+        String temp = parquet + ".tmp";
+        try (var tables = Files.list(v2Root)) {
+            for (Path table : tables.filter(Files::isDirectory).toList()) {
+                Path containerDir = partition(table, namespace, pod, container, "placeholder").getParent();
+                if (containerDir == null || !Files.isDirectory(containerDir)) {
+                    continue;
+                }
+                try (var instances = Files.list(containerDir)) {
+                    for (Path instance : instances.filter(Files::isDirectory).toList()) {
+                        if (instance.getFileName().toString().equals(keep)) {
+                            continue;
+                        }
+                        try (var walk = Files.walk(instance)) {
+                            for (Path file : walk.filter(Files::isRegularFile).toList()) {
+                                String name = file.getFileName().toString();
+                                if (parquet.equals(name) || temp.equals(name)) {
+                                    Files.deleteIfExists(file);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

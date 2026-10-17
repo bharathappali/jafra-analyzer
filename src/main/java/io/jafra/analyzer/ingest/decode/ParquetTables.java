@@ -17,6 +17,9 @@ import java.util.function.Consumer;
 
 /** Writes one zstd Parquet file for a chunk under the hive partition layout. */
 public final class ParquetTables {
+    /** macOS F_FULLFSYNC flushes the drive, so one flush at the end of a chunk covers every file just renamed. */
+    private static final boolean APPLE = System.getProperty("os.name", "").regionMatches(true, 0, "Mac", 0, 3);
+
     /** Test hook after the temp file is durable and before it replaces the chunk file. */
     public static volatile Consumer<Path> beforeRename;
 
@@ -41,6 +44,15 @@ public final class ParquetTables {
 
     public static void write(Connection connection, Path file, String table, List<String> columns, List<List<Object>> rows)
             throws SQLException {
+        write(connection, file, table, columns, rows, true);
+    }
+
+    /**
+     * @param deviceSync false leaves the drive flush to {@link #flushDevice}. On macOS that one flush covers the
+     *     chunk. Elsewhere each file and its directory are synced here.
+     */
+    static void write(Connection connection, Path file, String table, List<String> columns, List<List<Object>> rows,
+            boolean deviceSync) throws SQLException {
         String temp = "batch_" + table;
         try (Statement statement = connection.createStatement()) {
             statement.execute("DROP TABLE IF EXISTS " + temp);
@@ -69,11 +81,14 @@ public final class ParquetTables {
                 statement.execute("DROP TABLE IF EXISTS " + temp);
             }
         }
-        try (FileChannel channel = FileChannel.open(tempFile, StandardOpenOption.WRITE)) {
-            channel.force(true);
-        } catch (IOException error) {
-            deleteQuietly(tempFile);
-            throw new SQLException("could not fsync " + tempFile, error);
+        boolean syncFile = deviceSync || !APPLE;
+        if (syncFile) {
+            try (FileChannel channel = FileChannel.open(tempFile, StandardOpenOption.WRITE)) {
+                channel.force(deviceSync);
+            } catch (IOException error) {
+                deleteQuietly(tempFile);
+                throw new SQLException("could not fsync " + tempFile, error);
+            }
         }
         Consumer<Path> hook = beforeRename;
         if (hook != null) {
@@ -81,19 +96,38 @@ public final class ParquetTables {
         }
         try {
             Files.move(tempFile, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            fsyncDirectory(file.getParent());
+            if (syncFile) {
+                fsyncDirectory(file.getParent(), deviceSync);
+            }
         } catch (IOException error) {
             deleteQuietly(tempFile);
             throw new SQLException("could not publish " + file, error);
         }
     }
 
-    private static void fsyncDirectory(Path directory) throws IOException {
+    /** One drive flush after a chunk's files have been renamed. A crash before this leaves the chunk uncommitted. */
+    static void flushDevice(Path file) throws SQLException {
+        if (file == null || !Files.isRegularFile(file)) {
+            return;
+        }
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
+            channel.force(true);
+        } catch (IOException error) {
+            throw new SQLException("could not flush " + file, error);
+        }
+        try {
+            fsyncDirectory(file.getParent(), true);
+        } catch (IOException error) {
+            throw new SQLException("could not flush " + file.getParent(), error);
+        }
+    }
+
+    private static void fsyncDirectory(Path directory, boolean deviceSync) throws IOException {
         if (directory == null) {
             return;
         }
         try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
-            channel.force(true);
+            channel.force(deviceSync);
         } catch (IOException error) {
             if (error instanceof java.nio.file.AccessDeniedException || error.getMessage() != null && error.getMessage().contains("Is a directory")) {
                 return;
@@ -131,7 +165,7 @@ public final class ParquetTables {
                     "os_thread_id", "size", "bytes", "line", "depth", "safepoint_id", "n", "min_jdk",
                     "cpu_request_millicores_approx", "heap_before", "heap_after", "committed", "eden_before", "eden_after",
                     "survivor_before", "survivor_after", "old_before", "old_after", "young_capacity", "humongous_regions",
-                    "promoted_bytes", "tenuring_threshold", "region_count", "used" -> "BIGINT";
+                    "promoted_bytes", "tenuring_threshold", "region_count", "used", "max_heap_bytes" -> "BIGINT";
             case "value", "dt_s", "delta", "sum_pause_ms", "longest_pause_ms", "dur_ms", "magnitude", "weight",
                     "sum", "min", "max", "p50", "p90", "p99", "last", "cpu_limit_cores" -> "DOUBLE";
             case "provisional", "concurrent", "estimated" -> "BOOLEAN";

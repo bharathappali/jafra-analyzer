@@ -286,14 +286,18 @@ public final class V2ReadService {
             response.put("rows", List.of());
             return response;
         }
-        long after = cursor == null || cursor.isBlank() ? range.fromNs() - 1 : Long.parseLong(cursor);
-        String timeColumn = "t";
-        String durColumn = "gc".equals(table) ? "sum_pause_ms" : "gc_phase".equals(table) ? "dur_ms" : "dur_ms";
+        long[] position = eventCursor(cursor, range.fromNs());
+        String durColumn = "gc".equals(table) ? "sum_pause_ms" : "dur_ms";
+        String label = eventLabel(type);
+        String target = eventTarget(type);
         String extra = eventFilter(type);
         String min = minMs == null ? "" : " AND " + durColumn + " >= " + minMs;
-        String sql = "SELECT t, " + eventLabel(type) + ", " + durColumn + ", " + eventTarget(type)
-                + " FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs()
-                + " AND t < " + range.toNs() + " AND t > " + after + extra + min + " ORDER BY t LIMIT " + (cap + 1);
+        String sql = "SELECT t, label, dur_ms, target, seq FROM ("
+                + "SELECT t, " + label + " AS label, " + durColumn + " AS dur_ms, " + target + " AS target, "
+                + "row_number() OVER (PARTITION BY t ORDER BY " + label + ", " + durColumn + ", " + target + ") AS seq "
+                + "FROM read_parquet('" + glob + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs()
+                + " AND t < " + range.toNs() + extra + min + ") ranked WHERE t > " + position[0]
+                + " OR (t = " + position[0] + " AND seq > " + position[1] + ") ORDER BY t, seq LIMIT " + (cap + 1);
         List<Map<String, Object>> rows = new ArrayList<>();
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
             while (result.next()) {
@@ -302,13 +306,15 @@ public final class V2ReadService {
                 row.put("type", result.getString(2));
                 put(row, "dur_ms", result.getObject(3) == null ? null : result.getDouble(3));
                 put(row, "target", result.getString(4));
+                row.put("seq", result.getLong(5));
                 rows.add(row);
             }
         }
         String next = null;
         if (rows.size() > cap) {
             rows = new ArrayList<>(rows.subList(0, cap));
-            next = String.valueOf(rows.get(rows.size() - 1).get("t"));
+            Map<String, Object> last = rows.get(rows.size() - 1);
+            next = last.get("t") + "|" + last.get("seq");
         }
         response.put("status", rows.isEmpty() ? "no_data_in_window" : "ok");
         response.put("rows", rows);
@@ -493,7 +499,7 @@ public final class V2ReadService {
         List<String> codes = findings(id);
         Map<String, Object> blocks = new LinkedHashMap<>();
         blocks.put("cpu", block(headline(id, range, "cpu.jvm_user", "last", compact), null, List.of()));
-        blocks.put("container", block(headline(id, range, "container.memory_usage", "last", compact), signals.get("container"), List.of()));
+        blocks.put("container", block(headline(id, range, "container.memory_usage", "max", compact), signals.get("container"), List.of()));
         blocks.put("gc", block(headline(id, range, "gc.pause_ms", "p99", compact), null, codes));
         blocks.put("heap", block(heapHeadline(id, range, compact), null, List.of()));
         blocks.put("alloc", block(headline(id, range, "alloc.bytes", "sum", compact), null, List.of()));
@@ -706,7 +712,7 @@ public final class V2ReadService {
         if (glob == null) {
             return;
         }
-        String sql = "SELECT metric, CAST(bucket_t AS BIGINT), sum, n, p99, last FROM read_parquet('" + glob
+        String sql = "SELECT metric, CAST(bucket_t AS BIGINT), sum, n, p99, last, max FROM read_parquet('" + glob
                 + "', hive_partitioning=false, union_by_name=true) WHERE CAST(bucket_t AS BIGINT) >= " + range.fromNs()
                 + " AND CAST(bucket_t AS BIGINT) < " + range.toNs() + " ORDER BY 2";
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
@@ -717,6 +723,7 @@ public final class V2ReadService {
                 double n = result.getDouble(4);
                 double p99 = result.getDouble(5);
                 double last = result.getDouble(6);
+                double max = result.getObject(7) == null ? last : result.getDouble(7);
                 switch (metric) {
                     case "gc.pause_ms" -> snapshot.pauseMs += sum;
                     case "alloc.bytes" -> {
@@ -726,7 +733,7 @@ public final class V2ReadService {
                     case "cpu.jvm_user" -> snapshot.jvmCores = last;
                     case "container.throttled_slices" -> snapshot.throttledSlices += sum;
                     case "container.elapsed_slices" -> snapshot.elapsedSlices += sum;
-                    case "container.memory_usage" -> snapshot.memoryUsage = last;
+                    case "container.memory_usage" -> snapshot.memoryUsage = Math.max(snapshot.memoryUsage, max);
                     case "exceptions.throwables" -> snapshot.throwables += sum;
                     case "classes.loaded" -> snapshot.classesLoaded += sum;
                     case "classes.unloaded" -> snapshot.classesUnloaded += sum;
@@ -753,9 +760,10 @@ public final class V2ReadService {
             return;
         }
         String sql = "SELECT kind, collector, cause, heap_after, committed, survivor_after, young_capacity, tenuring_threshold, "
-                + "humongous_regions, promoted_bytes FROM read_parquet('" + glob
+                + "humongous_regions, promoted_bytes, gc_id FROM read_parquet('" + glob
                 + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
                 + " ORDER BY t";
+        java.util.Map<Long, Long> humongousByGc = new java.util.HashMap<>();
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
             while (result.next()) {
                 snapshot.observed = true;
@@ -778,7 +786,10 @@ public final class V2ReadService {
                 }
                 if (result.getObject(5) != null) {
                     snapshot.heapCommitted.add(result.getDouble(5));
-                    snapshot.heapMax = snapshot.heapMax == null ? result.getLong(5) : Math.max(snapshot.heapMax, result.getLong(5));
+                }
+                if (result.getObject(11) != null && result.getObject(9) != null) {
+                    long gcId = result.getLong(11);
+                    humongousByGc.merge(gcId, result.getLong(9), Math::max);
                 }
                 if (result.getObject(6) != null && result.getObject(7) != null && result.getDouble(7) > 0.0
                         && result.getDouble(6) >= 0.9 * result.getDouble(7)) {
@@ -795,15 +806,40 @@ public final class V2ReadService {
                 }
             }
         }
+        String instance = glob("jvm_instance", id);
+        if (instance != null) {
+            String heapSql = "SELECT max(max_heap_bytes) FROM read_parquet('" + instance
+                    + "', hive_partitioning=false, union_by_name=true)";
+            try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(heapSql)) {
+                if (result.next() && result.getObject(1) != null) {
+                    snapshot.heapMax = result.getLong(1);
+                }
+            } catch (SQLException ignored) {
+                snapshot.heapMax = null;
+            }
+        }
         String regions = glob("g1_region_frame", id);
         if (regions == null) {
             return;
         }
-        String countSql = "SELECT coalesce(sum(region_count), 0) FROM read_parquet('" + regions
-                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs();
+        String countSql = "SELECT gc_id, coalesce(sum(region_count), 0) FROM read_parquet('" + regions
+                + "', hive_partitioning=false, union_by_name=true) WHERE t >= " + range.fromNs() + " AND t < " + range.toNs()
+                + " GROUP BY gc_id";
+        double bestRatio = -1.0;
         try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(countSql)) {
-            if (result.next()) {
-                snapshot.regionCount = result.getLong(1);
+            while (result.next()) {
+                long gcId = result.getLong(1);
+                long regionTotal = result.getLong(2);
+                long humongous = humongousByGc.getOrDefault(gcId, 0L);
+                if (regionTotal <= 0L) {
+                    continue;
+                }
+                double ratio = humongous * 1.0 / regionTotal;
+                if (ratio > bestRatio) {
+                    bestRatio = ratio;
+                    snapshot.humongousRegions = humongous;
+                    snapshot.regionCount = regionTotal;
+                }
             }
         }
     }
@@ -893,6 +929,8 @@ public final class V2ReadService {
             if (result.getObject(3) != null) {
                 snapshot.cpuLimitCores = result.getDouble(3);
             }
+        } catch (SQLException ignored) {
+            return;
         }
         if (snapshot.effectiveCpus != null && snapshot.effectiveCpus > 0.0 && snapshot.jvmCores <= 1.5) {
             snapshot.jvmCores = snapshot.jvmCores * snapshot.effectiveCpus;
@@ -949,7 +987,12 @@ public final class V2ReadService {
         if (values.isEmpty()) {
             return Map.of();
         }
-        double value = "sum".equals(column) ? values.values().stream().mapToDouble(Double::doubleValue).sum() : values.lastEntry().getValue();
+        double value = switch (column) {
+            case "sum" -> values.values().stream().mapToDouble(Double::doubleValue).sum();
+            case "p99", "max" -> values.values().stream().mapToDouble(Double::doubleValue).max().orElse(0.0);
+            case "min" -> values.values().stream().mapToDouble(Double::doubleValue).min().orElse(0.0);
+            default -> values.lastEntry().getValue();
+        };
         Map<String, Object> metrics = new LinkedHashMap<>();
         metrics.put(metric + "." + column, number(value, ref.unit(), compact));
         return metrics;
@@ -1128,6 +1171,17 @@ public final class V2ReadService {
             }
         }
         return new ArrayList<>(buckets.values());
+    }
+
+    private static long[] eventCursor(String cursor, long fromNs) {
+        if (cursor == null || cursor.isBlank()) {
+            return new long[] {fromNs - 1, Long.MAX_VALUE};
+        }
+        int split = cursor.indexOf('|');
+        if (split < 0) {
+            return new long[] {Long.parseLong(cursor), Long.MAX_VALUE};
+        }
+        return new long[] {Long.parseLong(cursor.substring(0, split)), Long.parseLong(cursor.substring(split + 1))};
     }
 
     private static String eventTable(String type) {

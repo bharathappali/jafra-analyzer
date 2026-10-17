@@ -1,6 +1,7 @@
 package io.jafra.analyzer.api.v2;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -81,6 +82,125 @@ class V2ReadServiceTest {
                 List.of("namespace", "pod", "container", "jvm_instance_id", "t", "metric", "bucket_t", "n", "sum", "min", "max", "p50",
                         "p90", "p99", "last"),
                 List.of(List.of("default", "pod", "app", "abc", T0, "classes.unloaded", T0, 1L, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)));
+    }
+
+    @Test
+    void eventsPageOnTimeAndSequence() throws Exception {
+        Path root = Files.createTempDirectory("jafra-v2-events");
+        try (IngestCatalog catalog = new IngestCatalog(root.resolve("v2"))) {
+            long t = T0;
+            Path file = ParquetTables.partitionFile(root.resolve("v2"), "duration_event", "default", "pod", "app", "abc", t, "events");
+            ParquetTables.write(catalog.connection(), file, "duration_event",
+                    List.of("namespace", "pod", "container", "jvm_instance_id", "t", "type", "dur_ms", "target"),
+                    List.of(
+                            List.of("default", "pod", "app", "abc", t, "jdk.Compilation", 1.0, "b"),
+                            List.of("default", "pod", "app", "abc", t, "jdk.Compilation", 1.0, "a")));
+            V2ReadService service = new V2ReadService(catalog.connection(), root.resolve("v2"));
+            V2ReadService.Identity id = new V2ReadService.Identity("default", "pod", "app", "abc");
+            V2Window.Range range = new V2Window.Range(START, START.plusSeconds(1));
+            Map<String, Object> first = service.events(id, range, "compile", null, null, 1);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) first.get("rows");
+            assertEquals(1, rows.size());
+            assertEquals("a", rows.get(0).get("target"));
+            Map<String, Object> second = service.events(id, range, "compile", null, String.valueOf(first.get("next_cursor")), 1);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rest = (List<Map<String, Object>>) second.get("rows");
+            assertEquals(1, rest.size());
+            assertEquals("b", rest.get(0).get("target"));
+        }
+    }
+
+    @Test
+    void headlinesUseTheWindowMaxAndHumongousRatioIsPerGc() throws Exception {
+        Path root = Files.createTempDirectory("jafra-v2-headline");
+        Path v2 = root.resolve("v2");
+        try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            long later = T0 + 60_000_000_000L;
+            Path minute = ParquetTables.partitionFile(v2, "rollup_1m", "default", "pod", "app", "abc", T0, "bucket-peaks");
+            ParquetTables.write(catalog.connection(), minute, "rollup_1m", columns(), List.of(
+                    rollup("gc.pause_ms", T0, 50),
+                    rollup("gc.pause_ms", later, 10),
+                    rollup("container.memory_usage", T0, 900),
+                    rollup("container.memory_usage", later, 100)));
+            Path heap = ParquetTables.partitionFile(v2, "heap_gc", "default", "pod", "app", "abc", T0, "heap");
+            ParquetTables.write(catalog.connection(), heap, "heap_gc",
+                    List.of("namespace", "pod", "container", "jvm_instance_id", "t", "kind", "collector", "cause", "heap_after",
+                            "committed", "survivor_after", "young_capacity", "tenuring_threshold", "humongous_regions",
+                            "promoted_bytes", "gc_id"),
+                    List.of(
+                            heapRow(T0, 1L, 20L),
+                            heapRow(T0 + 1, 2L, 1L)));
+            Path regions = ParquetTables.partitionFile(v2, "g1_region_frame", "default", "pod", "app", "abc", T0, "regions");
+            ParquetTables.write(catalog.connection(), regions, "g1_region_frame",
+                    List.of("namespace", "pod", "container", "jvm_instance_id", "t", "gc_id", "type", "region_count", "used"),
+                    List.of(
+                            List.of("default", "pod", "app", "abc", T0, 1L, "humongous", 100L, 1L),
+                            List.of("default", "pod", "app", "abc", T0, 2L, "eden", 10_000L, 1L)));
+            Path identity = ParquetTables.partitionFile(v2, "jvm_instance", "default", "pod", "app", "abc", T0, "jvm");
+            ParquetTables.write(catalog.connection(), identity, "jvm_instance",
+                    List.of("namespace", "pod", "container", "jvm_instance_id", "t", "max_heap_bytes"),
+                    List.of(List.of("default", "pod", "app", "abc", T0, 1_000L)));
+            List<List<Object>> rising = new java.util.ArrayList<>();
+            for (int i = 1; i <= 10; i++) {
+                rising.add(java.util.Arrays.asList("default", "pod", "app", "abc", T0 + i, "young", "G1", "", (double) (i * 8), 100L,
+                        1L, 10L, 5, 0L, 0L, 100L + i));
+            }
+            Path leak = ParquetTables.partitionFile(v2, "heap_gc", "default", "pod", "app", "abc", T0, "leak");
+            ParquetTables.write(catalog.connection(), leak, "heap_gc",
+                    List.of("namespace", "pod", "container", "jvm_instance_id", "t", "kind", "collector", "cause", "heap_after",
+                            "committed", "survivor_after", "young_capacity", "tenuring_threshold", "humongous_regions",
+                            "promoted_bytes", "gc_id"),
+                    rising);
+
+            List<List<Object>> tightHeap = new java.util.ArrayList<>();
+            for (int i = 1; i <= 10; i++) {
+                tightHeap.add(java.util.Arrays.asList("default", "pod", "app", "tight", T0 + i, "young", "G1", "", (double) (i * 8),
+                        100L, 1L, 10L, 5, 0L, 0L, 200L + i));
+            }
+            Path tight = ParquetTables.partitionFile(v2, "heap_gc", "default", "pod", "app", "tight", T0, "tight-heap");
+            ParquetTables.write(catalog.connection(), tight, "heap_gc",
+                    List.of("namespace", "pod", "container", "jvm_instance_id", "t", "kind", "collector", "cause", "heap_after",
+                            "committed", "survivor_after", "young_capacity", "tenuring_threshold", "humongous_regions",
+                            "promoted_bytes", "gc_id"),
+                    tightHeap);
+            Path tightJvm = ParquetTables.partitionFile(v2, "jvm_instance", "default", "pod", "app", "tight", T0, "tight-jvm");
+            ParquetTables.write(catalog.connection(), tightJvm, "jvm_instance",
+                    List.of("namespace", "pod", "container", "jvm_instance_id", "t", "max_heap_bytes"),
+                    List.of(List.of("default", "pod", "app", "tight", T0, 90L)));
+
+            V2ReadService service = new V2ReadService(catalog.connection(), v2);
+            V2ReadService.Identity id = new V2ReadService.Identity("default", "pod", "app", "abc");
+            V2Window.Range range = new V2Window.Range(START, START.plusSeconds(120));
+            Map<String, Object> overview = service.overview(id, range, false);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> blocks = (Map<String, Object>) overview.get("blocks");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> gc = (Map<String, Object>) ((Map<String, Object>) blocks.get("gc")).get("headline_metrics");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> memory = (Map<String, Object>) ((Map<String, Object>) blocks.get("container")).get("headline_metrics");
+            assertEquals(50.0, ((Number) gc.get("gc.pause_ms.p99")).doubleValue());
+            assertEquals(900.0, ((Number) memory.get("container.memory_usage.max")).doubleValue());
+
+            Map<String, Object> findings = service.findings(id, range);
+            assertTrue(codes(findings).contains("HUMONGOUS_ALLOC"));
+            assertFalse(codes(findings).contains("MEMORY_LEAK"));
+            Map<String, Object> tightFindings = service.findings(new V2ReadService.Identity("default", "pod", "app", "tight"), range);
+            assertTrue(codes(tightFindings).contains("MEMORY_LEAK"));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> codes(Map<String, Object> findings) {
+        List<String> codes = new java.util.ArrayList<>();
+        for (Map<String, Object> finding : (List<Map<String, Object>>) findings.get("findings")) {
+            codes.add(String.valueOf(finding.get("code")));
+        }
+        return codes;
+    }
+
+    private static List<Object> heapRow(long t, long gcId, long humongous) {
+        return java.util.Arrays.asList("default", "pod", "app", "abc", t, "young", "G1", "", 10.0, 100L, 1L, 10L, 5, humongous, 0L, gcId);
     }
 
     private static void writeSeries(IngestCatalog catalog, Path v2) throws Exception {

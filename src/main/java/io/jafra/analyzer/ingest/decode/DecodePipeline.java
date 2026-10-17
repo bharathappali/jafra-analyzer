@@ -52,8 +52,10 @@ public class DecodePipeline {
         Path v2 = Path.of(root).resolve("v2");
         IngestCatalog catalog = new IngestCatalog(v2);
         this.decoder = new ChunkDecodeService(store, catalog, v2);
-        this.decoder.recover();
         this.lanes = Math.max(1, lanes);
+        this.decoder.configureLanes(this.lanes);
+        this.decoder.repair();
+        this.decoder.recover();
         this.compactInterval = parseDuration(compactInterval);
         this.compactMinAge = parseDuration(compactMinAge);
         this.retentionInterval = parseDuration(sweepInterval);

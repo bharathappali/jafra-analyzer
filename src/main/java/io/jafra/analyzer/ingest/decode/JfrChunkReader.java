@@ -111,6 +111,10 @@ public final class JfrChunkReader {
                     text(event, "youngCollector", "young"), text(event, "oldCollector", "old", "gcName"));
             case "jdk.BooleanFlag", "jdk.StringFlag" -> chunk.flags.add(
                     new FlagRow(text(event, "name"), text(event, "value"), text(event, "origin")));
+            case "jdk.LongFlag", "jdk.UnsignedLongFlag" -> {
+                Long value = longValue(event, "value");
+                chunk.flags.add(new FlagRow(text(event, "name"), value == null ? null : Long.toString(value), text(event, "origin")));
+            }
             case "jdk.EvacuationFailed", "jdk.PromotionFailed", "jdk.ZAllocationStall", "jdk.CodeCacheFull", "jdk.DataLoss" ->
                     chunk.signals.add(new SignalEvent(t, type));
             default -> EventRows.accept(chunk, event, type, t);

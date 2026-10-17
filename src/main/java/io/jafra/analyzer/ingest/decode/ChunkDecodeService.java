@@ -1,6 +1,8 @@
 package io.jafra.analyzer.ingest.decode;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -33,6 +35,8 @@ public final class ChunkDecodeService {
     private final IngestCatalog catalog;
     private final Path v2Root;
     private final RollupJobs rollups;
+    private final ThreadLocal<Connection> writers = new ThreadLocal<>();
+    private final ThreadLocal<Path> published = new ThreadLocal<>();
 
     public ChunkDecodeService(ChunkStore store, IngestCatalog catalog, Path v2Root) {
         this(store, catalog, v2Root, new RollupJobs());
@@ -141,10 +145,22 @@ public final class ChunkDecodeService {
         ingestChunk(metadata, JfrChunkReader.read(store.payloadPath(metadata.chunkId())));
     }
 
+    public void configureLanes(int lanes) {
+        try {
+            catalog.setLanes(lanes);
+        } catch (SQLException error) {
+            throw new IllegalStateException("could not assign decode lanes", error);
+        }
+    }
+
+    public void repair() {
+        CatalogRepair.repair(catalog, store, v2Root);
+    }
+
     public void drainRollups() {
         try {
             synchronized (catalog) {
-                rollups.drain(catalog.connection(), v2Root);
+                rollups.drain(catalog, v2Root);
             }
         } catch (Exception error) {
             LOG.warnf(error, "rollup refresh failed");
@@ -180,16 +196,42 @@ public final class ChunkDecodeService {
         DecodeGate.enter(metadata);
         long tStart = metadata.chunkStartTimeNs() > 0 ? metadata.chunkStartTimeNs() : 0L;
         long tEnd = tStart + Math.max(0L, metadata.chunkDurationNs());
-        Resolved resolved = resolve(metadata, chunk, tStart);
-        String retention = RetentionLog.state(
-                v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(), resolved.id);
-        if ("tombstoned".equals(retention) || "deleted".equals(retention)) {
-            catalog.quarantine(metadata.chunkId(), "retention_tombstone");
-            return;
+        Resolved resolved;
+        synchronized (catalog) {
+            resolved = resolve(metadata, chunk, tStart);
+            if (retained(metadata, resolved.id)) {
+                catalog.quarantine(metadata.chunkId(), "retention_tombstone");
+                return;
+            }
+            InstanceFiles.dropOtherCopies(v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(),
+                    metadata.chunkId(), resolved.id);
         }
-        long rows = write(metadata, chunk, resolved, tStart);
+        long rows = writeLocked(metadata, chunk, resolved, tStart);
+        ParquetTables.flushDevice(published.get());
+        synchronized (catalog) {
+            if (retained(metadata, resolved.id)) {
+                InstanceFiles.deleteChunk(v2Root, metadata.chunkId());
+                catalog.quarantine(metadata.chunkId(), "retention_tombstone");
+                return;
+            }
+        }
         catalog.complete(metadata.chunkId(), resolved.id, metadata.recordingId(), tStart, tEnd, rows, chunk.eventsSeen, hint(chunk));
-        rollups.submit(metadata.namespace(), metadata.podName(), metadata.containerName(), resolved.id, tStart, tEnd);
+    }
+
+    private boolean retained(ChunkMetadata metadata, String instanceId) throws java.io.IOException {
+        String retention = RetentionLog.state(
+                v2Root, metadata.namespace(), metadata.podName(), metadata.containerName(), instanceId);
+        return "tombstoned".equals(retention) || "deleted".equals(retention);
+    }
+
+    private Connection writer() throws SQLException {
+        Connection current = writers.get();
+        if (current == null || current.isClosed()) {
+            IngestCatalog.ensureDriver();
+            current = DriverManager.getConnection("jdbc:duckdb:");
+            writers.set(current);
+        }
+        return current;
     }
 
     Resolved resolve(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, long tStart) throws SQLException {
@@ -249,12 +291,6 @@ public final class ChunkDecodeService {
             for (IngestCatalog.Claim claim : claims) {
                 InstanceFiles.relocate(catalog.connection(), v2Root, metadata.namespace(), metadata.podName(),
                         metadata.containerName(), claim, realId, startNs);
-                if (!claim.emptied()) {
-                    rollups.submit(metadata.namespace(), metadata.podName(), metadata.containerName(), claim.fromId(),
-                            claim.minStartNs(), claim.maxEndNs());
-                }
-                rollups.submit(metadata.namespace(), metadata.podName(), metadata.containerName(), realId, claim.minStartNs(),
-                        claim.maxEndNs());
             }
         } catch (Exception error) {
             throw new SQLException("cannot move chunks onto " + realId, error);
@@ -268,13 +304,6 @@ public final class ChunkDecodeService {
             message = message + ": " + error.getMessage();
         }
         return message.length() > 500 ? message.substring(0, 500) : message;
-    }
-
-    private long write(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, Resolved resolved, long tStart)
-            throws Exception {
-        synchronized (catalog) {
-            return writeLocked(metadata, chunk, resolved, tStart);
-        }
     }
 
     private long writeLocked(ChunkMetadata metadata, JfrChunkReader.ReadChunk chunk, Resolved resolved, long tStart)
@@ -328,12 +357,13 @@ public final class ChunkDecodeService {
         row.add(derived.quality());
         row.add(derived.qos());
         row.add(derived.facts().preset());
+        row.add(maxHeap(chunk));
         return emit(metadata, "jvm_instance", resolved.id, tStart, List.of(
                 "cluster_id", "pod_uid", "jvm_start", "pid", "jdk_version", "jdk_feature", "vm_name",
                 "provisional", "instance_seq", "restart_reason_hint",
                 "cpu_quota", "cpu_slice_period", "cpu_shares", "mem_limit", "effective_cpus", "container_type",
                 "gc_young", "gc_old", "gc_selected_by", "cpu_limit_cores", "cpu_request_millicores_approx",
-                "cpu_request_quality", "cpu_qos", "preset"),
+                "cpu_request_quality", "cpu_qos", "preset", "max_heap_bytes"),
                 List.of(row));
     }
 
@@ -408,6 +438,22 @@ public final class ChunkDecodeService {
                 request == null || container == null ? null : ContainerMath.requestQuality(container.containerType()),
                 container == null ? null : ContainerMath.cpuQos(container.cpuShares()),
                 mem);
+    }
+
+    private static Long maxHeap(JfrChunkReader.ReadChunk chunk) {
+        if (chunk == null) {
+            return null;
+        }
+        for (JfrChunkReader.FlagRow flag : chunk.flags) {
+            if ("MaxHeapSize".equals(flag.name()) && flag.value() != null) {
+                try {
+                    return Long.parseLong(flag.value());
+                } catch (NumberFormatException ignored) {
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 
     private static String setting(JfrChunkReader.ReadChunk chunk, String event, String name) {
@@ -754,7 +800,8 @@ public final class ChunkDecodeService {
         columns.addAll(extra);
         Path file = ParquetTables.partitionFile(
                 v2Root, table, metadata.namespace(), metadata.podName(), metadata.containerName(), instanceId, tNs, fileStem);
-        ParquetTables.write(catalog.connection(), file, table, columns, rows);
+        ParquetTables.write(writer(), file, table, columns, rows, false);
+        published.set(file);
         return rows.size();
     }
 

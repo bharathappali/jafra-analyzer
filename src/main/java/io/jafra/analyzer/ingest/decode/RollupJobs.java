@@ -1,18 +1,17 @@
 package io.jafra.analyzer.ingest.decode;
 
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
 
-/** Rollups run after a chunk is marked done, so a slow rebuild cannot block the next chunk. */
+import org.jboss.logging.Logger;
+
+/** Rollups are rows in rollup_pending. A failed refresh stays queued and the drain continues. */
 public final class RollupJobs {
-    private final Queue<Job> pending = new ConcurrentLinkedQueue<>();
-    private volatile boolean paused;
+    private static final Logger LOG = Logger.getLogger(RollupJobs.class);
+    /** Test hook. A throw leaves that row queued. */
+    public static volatile Consumer<IngestCatalog.RollupJob> beforeRefresh;
 
-    public void submit(String namespace, String pod, String container, String instanceId, long tStart, long tEnd) {
-        pending.add(new Job(namespace, pod, container, instanceId, tStart, tEnd));
-    }
+    private volatile boolean paused;
 
     public void setPaused(boolean paused) {
         this.paused = paused;
@@ -22,19 +21,25 @@ public final class RollupJobs {
         return paused;
     }
 
-    public int drain(Connection connection, Path v2Root) throws Exception {
+    public int drain(IngestCatalog catalog, Path v2Root) throws Exception {
         if (paused) {
             return 0;
         }
         int ran = 0;
-        Job job;
-        while ((job = pending.poll()) != null) {
-            RollupWriter.refresh(connection, v2Root, job.namespace(), job.pod(), job.container(), job.instanceId(), job.tStart(),
-                    job.tEnd());
-            ran++;
+        for (IngestCatalog.RollupJob job : catalog.pendingRollups()) {
+            Consumer<IngestCatalog.RollupJob> hook = beforeRefresh;
+            try {
+                if (hook != null) {
+                    hook.accept(job);
+                }
+                RollupWriter.refresh(catalog.connection(), v2Root, job.namespace(), job.pod(), job.container(), job.instanceId(),
+                        job.tStart(), job.tEnd());
+                catalog.deleteRollup(job);
+                ran++;
+            } catch (Exception error) {
+                LOG.warnf(error, "rollup refresh failed for %s", job.instanceId());
+            }
         }
         return ran;
     }
-
-    private record Job(String namespace, String pod, String container, String instanceId, long tStart, long tEnd) {}
 }

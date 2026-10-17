@@ -2,6 +2,7 @@ package io.jafra.analyzer.ingest.decode;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
@@ -21,19 +22,24 @@ class DecodeLaneTest {
     void oneStuckPodDoesNotBlockAnother() throws Exception {
         String other = "pod-other";
         int lanes = 8;
-        int stuckLane = DecodeLanes.of("ns", "stuck", "app", "rec-stuck", lanes);
-        for (int i = 0; i < 40 && DecodeLanes.of("ns", other, "app", "rec-other", lanes) == stuckLane; i++) {
+        int stuckLane = DecodeLanes.of("ns", "stuck", "app", lanes);
+        for (int i = 0; i < 40 && DecodeLanes.of("ns", other, "app", lanes) == stuckLane; i++) {
             other = "pod-other-" + i;
         }
-        assertTrue(DecodeLanes.of("ns", other, "app", "rec-other", lanes) != stuckLane);
+        assertTrue(DecodeLanes.of("ns", other, "app", lanes) != stuckLane);
+        assertEquals(stuckLane, DecodeLanes.of("ns", "stuck", "app", lanes));
         Path root = Files.createTempDirectory("jafra-decode-lanes");
         Path v2 = root.resolve("v2");
         try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            catalog.setLanes(lanes);
             ChunkDecodeService service = new ChunkDecodeService(new ChunkStore(root), catalog, v2);
             service.enqueue(chunk("chunk-stuck", "rec-stuck", "stuck", 1L));
+            service.enqueue(chunk("chunk-stuck-rotated", "rec-stuck-2", "stuck", 2L));
             service.enqueue(chunk("chunk-other", "rec-other", other, 1L));
             IngestCatalog.Claimed first = catalog.claim(stuckLane, lanes, Instant.now());
-            IngestCatalog.Claimed second = catalog.claim(DecodeLanes.of("ns", other, "app", "rec-other", lanes), lanes, Instant.now());
+            IngestCatalog.Claimed blocked = catalog.claim(stuckLane, lanes, Instant.now());
+            IngestCatalog.Claimed second = catalog.claim(DecodeLanes.of("ns", other, "app", lanes), lanes, Instant.now());
+            assertNull(blocked);
             assertNotNull(first);
             assertNotNull(second);
             assertEquals("chunk-stuck", first.chunkId());
@@ -54,15 +60,15 @@ class DecodeLaneTest {
             try {
                 AtomicReference<Exception> failure = new AtomicReference<>();
                 String freePod = other;
-                Thread blocked = new Thread(() -> ingest(service, "chunk-stuck", "rec-stuck", "stuck", failure));
+                Thread stuckThread = new Thread(() -> ingest(service, "chunk-stuck", "rec-stuck", "stuck", failure));
                 Thread free = new Thread(() -> ingest(service, "chunk-free", "rec-free", freePod, failure));
-                blocked.start();
+                stuckThread.start();
                 assertTrue(entered.await(5, TimeUnit.SECONDS));
                 free.start();
                 free.join(5_000L);
                 assertEquals("done", status(catalog, "chunk-free"));
                 release.countDown();
-                blocked.join(5_000L);
+                stuckThread.join(5_000L);
                 assertEquals("done", status(catalog, "chunk-stuck"));
                 if (failure.get() != null) {
                     throw failure.get();

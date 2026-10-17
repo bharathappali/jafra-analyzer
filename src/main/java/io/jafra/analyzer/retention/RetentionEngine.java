@@ -116,9 +116,19 @@ public final class RetentionEngine {
         if (dryRun) {
             return body;
         }
-        if (catalog.isDecodingPod(ns, pod, container)) {
-            body.put("skipped", "decoding");
-            return body;
+        synchronized (catalog) {
+            if (catalog.isDecodingPod(ns, pod, container)) {
+                body.put("skipped", "decoding");
+                return body;
+            }
+            RetentionLog.upsert(v2, new RetentionLog.Entry(ns, pod, container, instance,
+                    switch (action) {
+                        case "delete" -> "deleted";
+                        case "clear-cache" -> "tombstoned";
+                        case "purge-raw" -> "summary_only";
+                        default -> throw new IllegalArgumentException("unknown retention action " + action);
+                    },
+                    now.toEpochMilli(), now.toEpochMilli(), raw, RetentionFiles.detailBytes(sizes), RetentionFiles.keptBytes(sizes)));
         }
         long removed = raw;
         String state = switch (action) {

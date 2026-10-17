@@ -33,9 +33,44 @@ class RollupFollowupTest {
                 assertEquals("done", rows.getString(1));
             }
             assertFalse(Files.isDirectory(v2.resolve("rollup_1m")));
+            assertEquals(1, catalog.pendingRollups().size());
             jobs.setPaused(false);
-            assertTrue(service.rollups().drain(catalog.connection(), v2) > 0);
+            assertTrue(jobs.drain(catalog, v2) > 0);
+            assertTrue(catalog.pendingRollups().isEmpty());
             assertTrue(Files.isDirectory(v2.resolve("rollup_1m")));
         }
+    }
+
+    @Test
+    void aFailedRefreshStaysQueuedAndTheNextJobRuns() throws Exception {
+        Path root = Files.createTempDirectory("jafra-rollup-continue");
+        Path v2 = root.resolve("v2");
+        try (IngestCatalog catalog = new IngestCatalog(v2)) {
+            ChunkDecodeService service = new ChunkDecodeService(new ChunkStore(root), catalog, v2);
+            ingest(service, "pod-a", "chunk-a");
+            ingest(service, "pod-b", "chunk-b");
+            RollupJobs.beforeRefresh = job -> {
+                if ("pod-a".equals(job.pod())) {
+                    throw new IllegalStateException("rollup blew up");
+                }
+            };
+            try {
+                service.rollups().drain(catalog, v2);
+            } finally {
+                RollupJobs.beforeRefresh = null;
+            }
+            assertEquals(1, catalog.pendingRollups().size());
+            assertEquals("pod-a", catalog.pendingRollups().get(0).pod());
+            assertTrue(Files.isDirectory(v2.resolve("rollup_1m")));
+        }
+    }
+
+    private static void ingest(ChunkDecodeService service, String pod, String chunkId) throws Exception {
+        long start = 1_700_000_000_000_000_000L;
+        JfrChunkReader.ReadChunk chunk = new JfrChunkReader.ReadChunk();
+        chunk.jvm = new JfrChunkReader.JvmFacts("21", "HotSpot", start / 1_000_000L, 1L);
+        chunk.gauges.add(new JfrChunkReader.GaugePoint(start + 1_000_000_000L, "cpu.jvm_user", 0.5));
+        service.ingestChunk(new ChunkMetadata(chunkId, "rec", "cluster", "ns", "uid-" + pod, pod, "app", "rec", 0L, 1L, "sum", start,
+                5_000_000_000L), chunk);
     }
 }

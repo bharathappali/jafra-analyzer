@@ -4,7 +4,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +24,7 @@ public final class IngestCatalog implements AutoCloseable {
     private static final long CLAIM_SLACK_NS = 1_000_000_000L;
 
     private final Connection connection;
+    private int lanes = 4;
 
     public IngestCatalog(Path v2Root) throws SQLException {
         try {
@@ -79,6 +79,19 @@ public final class IngestCatalog implements AutoCloseable {
                 statement.execute("ALTER TABLE chunk_ingest ADD COLUMN IF NOT EXISTS container VARCHAR");
                 statement.execute("ALTER TABLE chunk_ingest ADD COLUMN IF NOT EXISTS pod_uid VARCHAR");
                 statement.execute("ALTER TABLE jvm_instance_state ADD COLUMN IF NOT EXISTS pod_uid VARCHAR");
+                statement.execute("ALTER TABLE chunk_ingest ADD COLUMN IF NOT EXISTS lane INTEGER");
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS rollup_pending (
+                          namespace VARCHAR,
+                          pod VARCHAR,
+                          container VARCHAR,
+                          jvm_instance_id VARCHAR,
+                          t_start BIGINT,
+                          t_end BIGINT,
+                          PRIMARY KEY (namespace, pod, container, jvm_instance_id, t_start, t_end)
+                        )
+                        """);
+                statement.execute("CREATE INDEX IF NOT EXISTS chunk_ingest_status_t_start ON chunk_ingest(status, t_start)");
                 statement.execute("UPDATE chunk_ingest SET status = 'done' WHERE status = 'ok'");
             }
         } catch (java.io.IOException error) {
@@ -267,30 +280,89 @@ public final class IngestCatalog implements AutoCloseable {
     }
 
     public synchronized void applyClaims(List<Claim> claims, String realId) throws SQLException {
-        for (Claim claim : claims) {
-            if (claim.emptied()) {
-                rekey(claim.fromId(), realId);
-                continue;
-            }
-            for (String chunkId : claim.chunkIds()) {
-                try (PreparedStatement update = connection.prepareStatement(
-                        "UPDATE chunk_ingest SET jvm_instance_id = ? WHERE chunk_id = ?")) {
-                    update.setString(1, realId);
-                    update.setString(2, chunkId);
-                    update.executeUpdate();
+        boolean previous = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            for (Claim claim : claims) {
+                queueRollup(claim.fromId(), realId, claim.minStartNs(), claim.maxEndNs());
+                if (!claim.emptied()) {
+                    queueRollup(claim.fromId(), claim.fromId(), claim.minStartNs(), claim.maxEndNs());
+                }
+                if (claim.emptied()) {
+                    rekey(claim.fromId(), realId);
+                    continue;
+                }
+                for (String chunkId : claim.chunkIds()) {
+                    try (PreparedStatement update = connection.prepareStatement(
+                            "UPDATE chunk_ingest SET jvm_instance_id = ? WHERE chunk_id = ?")) {
+                        update.setString(1, realId);
+                        update.setString(2, chunkId);
+                        update.executeUpdate();
+                    }
+                }
+                try (PreparedStatement rewind = connection.prepareStatement(
+                        """
+                        UPDATE jvm_instance_state
+                        SET last_t_ns = COALESCE(
+                            (SELECT max(t_end) FROM chunk_ingest WHERE jvm_instance_id = ? AND status IN ('ok', 'done')), 0)
+                        WHERE jvm_instance_id = ?
+                        """)) {
+                    rewind.setString(1, claim.fromId());
+                    rewind.setString(2, claim.fromId());
+                    rewind.executeUpdate();
                 }
             }
-            try (PreparedStatement rewind = connection.prepareStatement(
-                    """
-                    UPDATE jvm_instance_state
-                    SET last_t_ns = COALESCE(
-                        (SELECT max(t_end) FROM chunk_ingest WHERE jvm_instance_id = ? AND status IN ('ok', 'done')), 0)
-                    WHERE jvm_instance_id = ?
-                    """)) {
-                rewind.setString(1, claim.fromId());
-                rewind.setString(2, claim.fromId());
-                rewind.executeUpdate();
+            connection.commit();
+        } catch (SQLException error) {
+            connection.rollback();
+            throw error;
+        } finally {
+            connection.setAutoCommit(previous);
+        }
+    }
+
+    public synchronized void queueRollup(String sourceInstanceId, String instanceId, long tStart, long tEnd) throws SQLException {
+        try (PreparedStatement insert = connection.prepareStatement(
+                """
+                INSERT INTO rollup_pending (namespace, pod, container, jvm_instance_id, t_start, t_end)
+                SELECT namespace, pod, container, ?, ?, ? FROM jvm_instance_state WHERE jvm_instance_id = ?
+                ON CONFLICT DO NOTHING
+                """)) {
+            insert.setString(1, instanceId);
+            insert.setLong(2, tStart);
+            insert.setLong(3, tEnd);
+            insert.setString(4, sourceInstanceId);
+            insert.executeUpdate();
+        }
+    }
+
+    public synchronized List<RollupJob> pendingRollups() throws SQLException {
+        List<RollupJob> jobs = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "SELECT namespace, pod, container, jvm_instance_id, t_start, t_end FROM rollup_pending")) {
+            while (rows.next()) {
+                jobs.add(new RollupJob(rows.getString(1), rows.getString(2), rows.getString(3), rows.getString(4), rows.getLong(5),
+                        rows.getLong(6)));
             }
+        }
+        return jobs;
+    }
+
+    public synchronized void deleteRollup(RollupJob job) throws SQLException {
+        try (PreparedStatement delete = connection.prepareStatement(
+                """
+                DELETE FROM rollup_pending
+                WHERE namespace IS NOT DISTINCT FROM ? AND pod IS NOT DISTINCT FROM ? AND container IS NOT DISTINCT FROM ?
+                  AND jvm_instance_id = ? AND t_start = ? AND t_end = ?
+                """)) {
+            delete.setString(1, job.namespace());
+            delete.setString(2, job.pod());
+            delete.setString(3, job.container());
+            delete.setString(4, job.instanceId());
+            delete.setLong(5, job.tStart());
+            delete.setLong(6, job.tEnd());
+            delete.executeUpdate();
         }
     }
 
@@ -510,6 +582,11 @@ public final class IngestCatalog implements AutoCloseable {
         }
     }
 
+    public synchronized void setLanes(int lanes) throws SQLException {
+        this.lanes = Math.max(1, lanes);
+        assignLanes();
+    }
+
     public synchronized void enqueue(ChunkMetadata metadata) throws SQLException {
         if (metadata == null) {
             return;
@@ -517,8 +594,9 @@ public final class IngestCatalog implements AutoCloseable {
         String status = statusOf(metadata.chunkId());
         if ("error".equals(status)) {
             try (PreparedStatement update = connection.prepareStatement(
-                    "UPDATE chunk_ingest SET status = 'pending', attempts = 0, next_attempt_ns = NULL WHERE chunk_id = ?")) {
-                update.setString(1, metadata.chunkId());
+                    "UPDATE chunk_ingest SET status = 'pending', attempts = 0, next_attempt_ns = NULL, lane = ? WHERE chunk_id = ?")) {
+                update.setInt(1, DecodeLanes.of(metadata.namespace(), metadata.podName(), metadata.containerName(), lanes));
+                update.setString(2, metadata.chunkId());
                 update.executeUpdate();
             }
             return;
@@ -531,8 +609,8 @@ public final class IngestCatalog implements AutoCloseable {
         try (PreparedStatement insert = connection.prepareStatement(
                 """
                 INSERT INTO chunk_ingest
-                  (chunk_id, recording_id, t_start, t_end, source, status, rows, attempts, namespace, pod, container, pod_uid)
-                VALUES (?, ?, ?, ?, 'jfr', 'pending', 0, 0, ?, ?, ?, ?)
+                  (chunk_id, recording_id, t_start, t_end, source, status, rows, attempts, namespace, pod, container, pod_uid, lane)
+                VALUES (?, ?, ?, ?, 'jfr', 'pending', 0, 0, ?, ?, ?, ?, ?)
                 """)) {
             insert.setString(1, metadata.chunkId());
             insert.setString(2, metadata.recordingId());
@@ -542,7 +620,33 @@ public final class IngestCatalog implements AutoCloseable {
             insert.setString(6, metadata.podName());
             insert.setString(7, metadata.containerName());
             insert.setString(8, metadata.podUid());
+            insert.setInt(9, DecodeLanes.of(metadata.namespace(), metadata.podName(), metadata.containerName(), lanes));
             insert.executeUpdate();
+        }
+    }
+
+    public synchronized void assignLanes() throws SQLException {
+        List<String[]> pods = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "SELECT DISTINCT namespace, pod, container FROM chunk_ingest WHERE lane IS NULL")) {
+            while (rows.next()) {
+                pods.add(new String[] {rows.getString(1), rows.getString(2), rows.getString(3)});
+            }
+        }
+        try (PreparedStatement update = connection.prepareStatement(
+                """
+                UPDATE chunk_ingest SET lane = ?
+                WHERE namespace IS NOT DISTINCT FROM ? AND pod IS NOT DISTINCT FROM ? AND container IS NOT DISTINCT FROM ?
+                  AND lane IS NULL
+                """)) {
+            for (String[] pod : pods) {
+                update.setInt(1, DecodeLanes.of(pod[0], pod[1], pod[2], lanes));
+                update.setString(2, pod[0]);
+                update.setString(3, pod[1]);
+                update.setString(4, pod[2]);
+                update.executeUpdate();
+            }
         }
     }
 
@@ -574,6 +678,7 @@ public final class IngestCatalog implements AutoCloseable {
                 events.executeUpdate();
             }
             touchInstance(jvmInstanceId, tEnd, hint);
+            queueRollup(jvmInstanceId, jvmInstanceId, tStart, tEnd);
             connection.commit();
         } catch (SQLException error) {
             connection.rollback();
@@ -683,46 +788,35 @@ public final class IngestCatalog implements AutoCloseable {
 
     private Claimed claim(int lane, int lanes, Instant now, boolean anyLane) throws SQLException {
         long nowNs = now.toEpochMilli() * 1_000_000L;
-        List<Queued> queued = new ArrayList<>();
+        Claimed chosen;
         try (PreparedStatement statement = connection.prepareStatement(
                 """
-                SELECT chunk_id, namespace, pod, container, recording_id, t_start, t_end, status, attempts, next_attempt_ns, pod_uid
-                FROM chunk_ingest
-                WHERE status IN ('pending', 'decoding', 'failed', 'error')
+                WITH ranked AS (
+                  SELECT chunk_id, namespace, pod, container, pod_uid, recording_id, t_start, t_end, status, attempts, next_attempt_ns, lane,
+                         ROW_NUMBER() OVER (PARTITION BY namespace, pod, container ORDER BY t_start, chunk_id) AS rn
+                  FROM chunk_ingest
+                  WHERE status IN ('pending', 'decoding', 'failed', 'error')
+                )
+                SELECT chunk_id, namespace, pod, container, pod_uid, recording_id, t_start, t_end
+                FROM ranked
+                WHERE rn = 1
+                  AND status IN ('pending', 'failed', 'error')
+                  AND (status <> 'failed' OR (coalesce(attempts, 0) < ? AND (next_attempt_ns IS NULL OR next_attempt_ns <= ?)))
+                  AND (? OR lane = ?)
+                ORDER BY t_start, chunk_id
+                LIMIT 1
                 """)) {
+            statement.setInt(1, MAX_ATTEMPTS);
+            statement.setLong(2, nowNs);
+            statement.setBoolean(3, anyLane);
+            statement.setInt(4, lane);
             try (ResultSet rows = statement.executeQuery()) {
-                while (rows.next()) {
-                    queued.add(new Queued(rows.getString(1), rows.getString(2), rows.getString(3), rows.getString(4),
-                            rows.getString(5), rows.getLong(6), rows.getLong(7), rows.getString(8), rows.getInt(9),
-                            rows.getObject(10) == null ? null : rows.getLong(10), rows.getString(11)));
+                if (!rows.next()) {
+                    return null;
                 }
+                chosen = new Claimed(rows.getString(1), rows.getString(2), rows.getString(3), rows.getString(4), rows.getString(5),
+                        rows.getString(6), rows.getLong(7), rows.getLong(8));
             }
-        }
-        queued.sort(Comparator.comparingLong(Queued::tStart).thenComparing(Queued::chunkId));
-        Map<String, Queued> head = new LinkedHashMap<>();
-        for (Queued row : queued) {
-            head.putIfAbsent(recordingKey(row), row);
-        }
-        Claimed chosen = null;
-        for (Queued row : head.values()) {
-            if ("decoding".equals(row.status())) {
-                continue;
-            }
-            if ("failed".equals(row.status()) && (row.attempts() >= MAX_ATTEMPTS
-                    || (row.nextAttemptNs() != null && row.nextAttemptNs() > nowNs))) {
-                continue;
-            }
-            if (!anyLane && DecodeLanes.of(row.namespace(), row.pod(), row.container(), row.recordingId(), lanes) != lane) {
-                continue;
-            }
-            if (chosen == null || row.tStart() < chosen.tStart()
-                    || (row.tStart() == chosen.tStart() && row.chunkId().compareTo(chosen.chunkId()) < 0)) {
-                chosen = new Claimed(row.chunkId(), row.namespace(), row.pod(), row.container(), row.podUid(), row.recordingId(),
-                        row.tStart(), row.tEnd());
-            }
-        }
-        if (chosen == null) {
-            return null;
         }
         try (PreparedStatement update = connection.prepareStatement(
                 "UPDATE chunk_ingest SET status = 'decoding', error = NULL WHERE chunk_id = ? AND status IN ('pending', 'failed', 'error')")) {
@@ -734,12 +828,48 @@ public final class IngestCatalog implements AutoCloseable {
         return chosen;
     }
 
-    private static String recordingKey(Queued row) {
-        return value(row.namespace()) + "|" + value(row.pod()) + "|" + value(row.container()) + "|" + value(row.recordingId());
+    public synchronized void fillIdentity(String chunkId, ChunkMetadata metadata) throws SQLException {
+        if (metadata == null) {
+            return;
+        }
+        try (PreparedStatement update = connection.prepareStatement(
+                """
+                UPDATE chunk_ingest
+                SET namespace = ?, pod = ?, container = ?, pod_uid = ?, recording_id = coalesce(recording_id, ?)
+                WHERE chunk_id = ? AND (namespace IS NULL OR pod IS NULL OR container IS NULL)
+                """)) {
+            update.setString(1, metadata.namespace());
+            update.setString(2, metadata.podName());
+            update.setString(3, metadata.containerName());
+            update.setString(4, metadata.podUid());
+            update.setString(5, metadata.recordingId());
+            update.setString(6, chunkId);
+            update.executeUpdate();
+        }
     }
 
-    private static String value(String raw) {
-        return raw == null ? "" : raw;
+    public synchronized List<String> chunksMissingIdentity() throws SQLException {
+        List<String> ids = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "SELECT chunk_id FROM chunk_ingest WHERE namespace IS NULL OR pod IS NULL OR container IS NULL")) {
+            while (rows.next()) {
+                ids.add(rows.getString(1));
+            }
+        }
+        return ids;
+    }
+
+    public synchronized void reopen(String chunkId) throws SQLException {
+        try (PreparedStatement update = connection.prepareStatement(
+                """
+                UPDATE chunk_ingest
+                SET status = 'pending', attempts = 0, next_attempt_ns = NULL, error = NULL
+                WHERE chunk_id = ? AND status IN ('ok', 'done')
+                """)) {
+            update.setString(1, chunkId);
+            update.executeUpdate();
+        }
     }
 
     private String statusOf(String chunkId) throws SQLException {
@@ -806,9 +936,7 @@ public final class IngestCatalog implements AutoCloseable {
             String namespace, String pod, String container, String status, long chunks, long fromNs, long toNs, long eventsSeen,
             long rowsWritten) {}
 
-    private record Queued(
-            String chunkId, String namespace, String pod, String container, String recordingId, long tStart, long tEnd, String status,
-            int attempts, Long nextAttemptNs, String podUid) {}
+    public record RollupJob(String namespace, String pod, String container, String instanceId, long tStart, long tEnd) {}
 
     private static final class ClaimBuilder {
         private final String id;
