@@ -91,7 +91,7 @@ class JfrEventSummarizerTest {
         ChunkMetadata metadata = new ChunkMetadata(
                 chunkId,
                 recordingId,
-                "local-demo",
+                "default",
                 namespace,
                 "uid-" + pod,
                 pod,
@@ -100,6 +100,15 @@ class JfrEventSummarizerTest {
                 0,
                 payload.length,
                 "checksum");
+        if (store.contains(chunkId)) {
+            Path payloadPath = store.payloadPath(chunkId);
+            store.index().delete(chunkId);
+            Files.deleteIfExists(payloadPath);
+            String name = payloadPath.getFileName().toString();
+            if (name.endsWith(".jfr")) {
+                Files.deleteIfExists(payloadPath.resolveSibling(name.substring(0, name.length() - 4) + ".json"));
+            }
+        }
         ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
         write.write(payload);
         store.commit(write, metadata);

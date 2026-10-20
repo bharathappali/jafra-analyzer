@@ -1,4 +1,6 @@
-package io.jafra.analyzer.storage;
+package io.jafra.analyzer.storage.legacy;
+
+import io.jafra.analyzer.storage.ChunkMetadata;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

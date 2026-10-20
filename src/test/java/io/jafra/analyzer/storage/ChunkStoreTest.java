@@ -27,9 +27,13 @@ class ChunkStoreTest {
 
         assertTrue(Files.exists(store.payloadPath("chunk-a")));
         assertFalse(Files.exists(root.resolve("stitch-cache")));
-        assertTrue(Files.walk(root.resolve("recordings"))
-                .noneMatch(path -> path.getFileName().toString().equals("stitched.jfr")));
+        Path legacyRecordings = root.resolve("recordings");
+        if (Files.exists(legacyRecordings)) {
+            assertTrue(Files.walk(legacyRecordings)
+                    .noneMatch(path -> path.getFileName().toString().equals("stitched.jfr")));
+        }
 
+        store.close();
         ChunkStore restarted = new ChunkStore(root);
         restarted.recover();
         assertTrue(restarted.contains("chunk-a"));
@@ -39,6 +43,7 @@ class ChunkStoreTest {
         assertArrayEquals(
                 new byte[] {1, 2, 3, 4},
                 readInOrder(restarted.contiguousPayloads(List.of(first.recordingId()))));
+        restarted.close();
     }
 
     @Test
@@ -50,13 +55,17 @@ class ChunkStoreTest {
         write.force();
         write.closeQuietly();
         Files.createDirectories(root.resolve("chunks"));
-        Files.move(root.resolve("tmp/orphan.part"), root.resolve("chunks/orphan.jfr"));
+        Files.move(root.resolve("data/tmp/orphan.part"), root.resolve("chunks/orphan.jfr"));
+        store.close();
 
         ChunkStore restarted = new ChunkStore(root);
         restarted.recover();
         assertFalse(restarted.contains("orphan"));
         assertFalse(Files.exists(root.resolve("chunks/orphan.jfr")));
-        assertFalse(Files.exists(root.resolve("tmp/orphan.part")));
+        assertFalse(Files.exists(root.resolve("data/tmp/orphan.part")));
+        assertTrue(Files.isRegularFile(root.resolve("data/quarantine/orphan.jfr")));
+        assertTrue(Files.readString(root.resolve("data/quarantine/orphan.reason.txt")).contains("orphan payload"));
+        restarted.close();
     }
 
     @Test
@@ -76,6 +85,7 @@ class ChunkStoreTest {
         List<Path> paths = store.contiguousPayloads(List.of("local-demo/pod/auth-cache/profile-0.jfr"));
         assertEquals(List.of("chunk-a", "chunk-b"), chunkIds(paths));
         assertArrayEquals(new byte[] {1, 2, 3, 4, 5, 6}, readInOrder(paths));
+        store.close();
     }
 
     @Test
@@ -92,6 +102,7 @@ class ChunkStoreTest {
         assertArrayEquals(
                 new byte[] {9, 1, 2, 3, 4},
                 readInOrder(store.contiguousPayloads(List.of("rec-b", "rec-a"))));
+        store.close();
     }
 
     @Test
@@ -103,6 +114,7 @@ class ChunkStoreTest {
         ChunkStore store = new ChunkStore(root);
         store.recover();
         assertFalse(Files.exists(cache));
+        store.close();
     }
 
     @Test
@@ -116,11 +128,13 @@ class ChunkStoreTest {
         Files.write(legacyDir.resolve("stitched.jfr"), new byte[] {9, 9, 9});
         Files.writeString(legacyDir.resolve("manifest.json"), "{\"nextOffset\":2}");
 
+        store.close();
         ChunkStore restarted = new ChunkStore(root);
         restarted.recover();
         assertFalse(Files.exists(legacyDir.resolve("stitched.jfr")));
         assertFalse(Files.exists(legacyDir.resolve("manifest.json")));
         assertTrue(restarted.contains("chunk-a"));
+        restarted.close();
     }
 
     @Test
@@ -146,21 +160,28 @@ class ChunkStoreTest {
         assertTrue(store.contains("chunk-a"));
         assertFalse(Files.exists(chunks.resolve("chunk-a.jfr")));
         assertFalse(Files.exists(chunks.resolve("chunk-a.meta")));
-        ChunkStore.StoredChunk stored = store.storedChunks().getFirst();
-        assertEquals("chunk-a", stored.parsed().chunkId());
-        assertEquals(1_750_000_000L, stored.parsed().startSeconds());
-        Path firstPayload = stored.payload();
+        assertEquals(1_750_000_000_000_000_000L, store.index().get("chunk-a").startNs());
+        Path firstPayload = store.payloadPath("chunk-a");
+        assertTrue(firstPayload.startsWith(root.resolve("data/recordings")));
 
+        store.close();
         ChunkStore restarted = new ChunkStore(root);
         restarted.recover();
-        assertEquals(firstPayload, restarted.storedChunks().getFirst().payload());
+        assertEquals(firstPayload, restarted.payloadPath("chunk-a"));
         assertTrue(restarted.contains("chunk-a"));
+        restarted.close();
     }
 
     private static List<String> chunkIds(List<Path> paths) {
-        return paths.stream()
-                .map(path -> ChunkFileName.parse(path.getFileName().toString()).chunkId())
-                .toList();
+        return paths.stream().map(ChunkStoreTest::chunkIdOf).toList();
+    }
+
+    private static String chunkIdOf(Path path) {
+        String name = path.getFileName().toString();
+        if (name.endsWith(".jfr")) {
+            name = name.substring(0, name.length() - 4);
+        }
+        return name.substring(8 + 1 + 8 + 1);
     }
 
     private static byte[] readInOrder(List<Path> paths) throws IOException {

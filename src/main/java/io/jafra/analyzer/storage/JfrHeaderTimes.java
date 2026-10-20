@@ -9,13 +9,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 /** First JFR chunk header in a payload file. Used when older meta has no start time. */
-final class JfrHeaderTimes {
+public final class JfrHeaderTimes {
     private static final int HEADER_SIZE = 68;
     private static final byte[] MAGIC = new byte[] {'F', 'L', 'R', 0};
 
     private JfrHeaderTimes() {}
 
-    static long[] read(Path payload) {
+    public static long[] read(Path payload) {
         if (payload == null || !Files.isRegularFile(payload)) {
             return null;
         }

@@ -166,7 +166,7 @@ class RecordingResourceTest {
         ChunkMetadata metadata = new ChunkMetadata(
                 chunkId,
                 recordingId,
-                "local-demo",
+                "default",
                 namespace,
                 "uid-" + pod,
                 pod,
@@ -175,9 +175,23 @@ class RecordingResourceTest {
                 0,
                 payload.length,
                 "checksum");
+        replaceExisting(chunkId);
         ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
         write.write(payload);
         store.commit(write, metadata);
+    }
+
+    private void replaceExisting(String chunkId) throws Exception {
+        if (!store.contains(chunkId)) {
+            return;
+        }
+        Path payload = store.payloadPath(chunkId);
+        store.index().delete(chunkId);
+        Files.deleteIfExists(payload);
+        String name = payload.getFileName().toString();
+        if (name.endsWith(".jfr")) {
+            Files.deleteIfExists(payload.resolveSibling(name.substring(0, name.length() - 4) + ".json"));
+        }
     }
 
     private static byte[] dumpRecording() throws Exception {

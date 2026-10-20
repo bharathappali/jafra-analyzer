@@ -12,7 +12,10 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import io.jafra.analyzer.storage.ChunkMetadata;
+import io.jafra.analyzer.storage.ChunkPaths;
 import io.jafra.analyzer.storage.ChunkStore;
+import io.jafra.analyzer.storage.DuplicateChunkException;
+import io.jafra.analyzer.storage.InvalidIdentityException;
 import io.jafra.ingest.v1.AckStatus;
 import io.jafra.ingest.v1.OpenChunk;
 import io.jafra.ingest.v1.UploadAck;
@@ -97,6 +100,9 @@ public class IngestRegistry {
     }
 
     private UploadAck handleOpen(StreamContext context, OpenChunk open) {
+        if (!store.ready()) {
+            return ack(open.getRecordingId(), "", AckStatus.RETRY, "storage migration in progress", 0);
+        }
         String chunkId = IngestSession.chunkId(open);
         if (store.contains(chunkId)) {
             duplicateChunks.incrementAndGet();
@@ -116,6 +122,12 @@ public class IngestRegistry {
             active.remove(chunkId);
             protocolFailures.increment();
             return reject(context, open.getRecordingId(), chunkId, result.reason());
+        }
+        try {
+            ChunkPaths.relative(preview(open, chunkId));
+        } catch (InvalidIdentityException error) {
+            active.remove(chunkId);
+            return reject(context, open.getRecordingId(), chunkId, error.getMessage());
         }
         try {
             context.incoming = store.beginWrite(chunkId);
@@ -172,8 +184,22 @@ public class IngestRegistry {
                     open.getChunkStartTimeNs(),
                     open.getChunkDurationNs());
             try {
-                store.commit(context.incoming, metadata);
+                store.commit(
+                        context.incoming,
+                        metadata,
+                        open.getNodeName(),
+                        open.getPhysicalFileSequence(),
+                        open.getChunkSequence());
                 context.incoming = null;
+            } catch (DuplicateChunkException error) {
+                duplicateChunks.incrementAndGet();
+                duplicates.increment();
+                active.remove(commit.getChunkId());
+                return ack(commit.getRecordingId(), commit.getChunkId(), AckStatus.DUPLICATE, "duplicate chunk ID",
+                        context.session.receivedBytes());
+            } catch (InvalidIdentityException error) {
+                active.remove(commit.getChunkId());
+                return reject(context, commit.getRecordingId(), commit.getChunkId(), error.getMessage());
             } catch (IOException error) {
                 context.abort(store);
                 active.remove(commit.getChunkId());
@@ -218,6 +244,23 @@ public class IngestRegistry {
         }
         LOG.warnf("rejecting ingest stream: %s", reason);
         return ack(recordingId, chunkId == null ? "" : chunkId, AckStatus.REJECTED, reason, context.session.receivedBytes());
+    }
+
+    private static ChunkMetadata preview(OpenChunk open, String chunkId) {
+        return new ChunkMetadata(
+                chunkId,
+                open.getRecordingId(),
+                open.getClusterId(),
+                open.getNamespace(),
+                open.getPodUid(),
+                open.getPodName(),
+                open.getContainerName(),
+                open.getPhysicalFilename(),
+                open.getChunkOffset(),
+                open.getChunkLength(),
+                "",
+                open.getChunkStartTimeNs(),
+                open.getChunkDurationNs());
     }
 
     private static UploadAck ack(String recordingId, String chunkId, AckStatus status, String message, long bytes) {

@@ -11,6 +11,8 @@ import jakarta.inject.Singleton;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
+import io.jafra.analyzer.index.EventRangeDecoder;
+import io.jafra.analyzer.index.IndexStore;
 import io.quarkus.runtime.StartupEvent;
 
 @ApplicationScoped
@@ -18,11 +20,14 @@ public class AnalyzerStorage {
     @Produces
     @Singleton
     ChunkStore chunkStore(
+            IndexStore index,
+            EventRangeDecoder decoder,
             @ConfigProperty(name = "jafra.storage.root", defaultValue = "/var/lib/jafra/analyzer") String root)
             throws IOException {
         Path path = Path.of(root);
         Files.createDirectories(path);
-        ChunkStore store = new ChunkStore(path);
+        ChunkStore store = new ChunkStore(path, index);
+        store.onStored(decoder::offer);
         store.recover();
         return store;
     }

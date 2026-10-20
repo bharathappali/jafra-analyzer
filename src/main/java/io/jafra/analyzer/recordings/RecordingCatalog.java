@@ -18,8 +18,8 @@ import jakarta.ws.rs.NotFoundException;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import io.jafra.analyzer.index.ChunkIndexRow;
 import io.jafra.analyzer.storage.ChunkMetadata;
-import io.jafra.analyzer.storage.ChunkFileName;
 import io.jafra.analyzer.storage.ChunkStore;
 
 @ApplicationScoped
@@ -33,8 +33,12 @@ public class RecordingCatalog {
     }
 
     public RecordingListResponse list(String namespace, String pod, String container) {
+        return list(null, namespace, pod, container);
+    }
+
+    public RecordingListResponse list(String cluster, String namespace, String pod, String container) {
         Map<WorkloadKey, List<RecordingSummary>> grouped = new LinkedHashMap<>();
-        for (IndexedRecording recording : index(namespace, pod, container)) {
+        for (IndexedRecording recording : index(cluster, namespace, pod, container)) {
             grouped.computeIfAbsent(recording.key(), ignored -> new ArrayList<>()).add(recording.summary());
         }
         List<WorkloadRecordings> workloads = new ArrayList<>();
@@ -50,7 +54,11 @@ public class RecordingCatalog {
     }
 
     public WorkloadRecordings requireWorkload(String namespace, String pod, String container) {
-        RecordingListResponse listed = list(namespace, pod, container);
+        return requireWorkload(null, namespace, pod, container);
+    }
+
+    public WorkloadRecordings requireWorkload(String cluster, String namespace, String pod, String container) {
+        RecordingListResponse listed = list(cluster, namespace, pod, container);
         if (listed.workloads().size() != 1) {
             throw new NotFoundException("no recordings for namespace/%s/pod/%s/container/%s".formatted(namespace, pod, container));
         }
@@ -58,7 +66,12 @@ public class RecordingCatalog {
     }
 
     public IndexedRecording requireRecording(String namespace, String pod, String container, String filename) {
-        List<IndexedRecording> matches = index(namespace, pod, container).stream()
+        return requireRecording(null, namespace, pod, container, filename);
+    }
+
+    public IndexedRecording requireRecording(
+            String cluster, String namespace, String pod, String container, String filename) {
+        List<IndexedRecording> matches = index(cluster, namespace, pod, container).stream()
                 .filter(recording -> recording.summary().filename().equals(filename))
                 .toList();
         if (matches.size() != 1) {
@@ -69,12 +82,16 @@ public class RecordingCatalog {
     }
 
     public IndexedRecording latestClosed(String namespace, String pod, String container) {
-        WorkloadRecordings workload = requireWorkload(namespace, pod, container);
+        return latestClosed(null, namespace, pod, container);
+    }
+
+    public IndexedRecording latestClosed(String cluster, String namespace, String pod, String container) {
+        WorkloadRecordings workload = requireWorkload(cluster, namespace, pod, container);
         List<RecordingSummary> recordings = workload.recordings();
         RecordingSummary selected = recordings.size() >= 2
                 ? recordings.get(recordings.size() - 2)
                 : recordings.getLast();
-        return requireRecording(namespace, pod, container, selected.filename());
+        return requireRecording(cluster, namespace, pod, container, selected.filename());
     }
 
     public Optional<WindowSelection> openWindow(
@@ -83,7 +100,17 @@ public class RecordingCatalog {
             String container,
             ReportWindow window)
             throws IOException {
-        List<IndexedRecording> all = index(namespace, pod, container);
+        return openWindow(null, namespace, pod, container, window);
+    }
+
+    public Optional<WindowSelection> openWindow(
+            String cluster,
+            String namespace,
+            String pod,
+            String container,
+            ReportWindow window)
+            throws IOException {
+        List<IndexedRecording> all = index(cluster, namespace, pod, container);
         if (all.isEmpty()) {
             throw new NotFoundException("no recordings for namespace/%s/pod/%s/container/%s"
                     .formatted(namespace, pod, container));
@@ -171,46 +198,41 @@ public class RecordingCatalog {
     }
 
     List<IndexedRecording> index() {
-        return index(null, null, null);
+        return index(null, null, null, null);
     }
 
-    List<IndexedRecording> index(String namespace, String pod, String container) {
-        Map<String, List<ChunkMetadata>> grouped = new LinkedHashMap<>();
-        for (ChunkStore.StoredChunk stored : store.storedChunks()) {
-            if (!ChunkFileName.allows(stored.parsed(), namespace, pod, container)) {
+    List<IndexedRecording> index(String cluster, String namespace, String pod, String container) {
+        String clusterId = cluster == null || cluster.isBlank() ? "default" : cluster;
+        List<ChunkIndexRow> matched;
+        try {
+            matched = store.index().findRange(clusterId, namespace, pod, container, Long.MIN_VALUE, Long.MAX_VALUE);
+        } catch (IOException error) {
+            throw new java.io.UncheckedIOException(error);
+        }
+        Map<String, List<ChunkIndexRow>> grouped = new LinkedHashMap<>();
+        for (ChunkIndexRow row : matched) {
+            if (row.podName() == null || row.podName().isBlank()) {
                 continue;
             }
-            ChunkMetadata metadata = store.readMeta(stored);
-            if (metadata == null) {
-                continue;
-            }
-            String podName = store.podName(metadata.podUid(), metadata.podName());
-            if (podName == null || podName.isBlank()) {
-                continue;
-            }
-            if (!blankOrEqual(namespace, metadata.namespace())
-                    || !blankOrEqual(pod, podName)
-                    || !blankOrEqual(container, metadata.containerName())) {
-                continue;
-            }
-            store.absorb(metadata);
-            grouped.computeIfAbsent(metadata.recordingId(), ignored -> new ArrayList<>()).add(metadata);
+            grouped.computeIfAbsent(row.recordingId(), ignored -> new ArrayList<>()).add(row);
         }
         List<IndexedRecording> recordings = new ArrayList<>();
-        for (Map.Entry<String, List<ChunkMetadata>> entry : grouped.entrySet()) {
+        for (Map.Entry<String, List<ChunkIndexRow>> entry : grouped.entrySet()) {
             String recordingId = entry.getKey();
             List<ChunkMetadata> contiguous = store.contiguousChunks(recordingId);
             if (contiguous.isEmpty()) {
                 continue;
             }
             ChunkMetadata sample = contiguous.getFirst();
-            String podName = store.podName(sample.podUid(), sample.podName());
             long bytes = contiguous.stream().mapToLong(ChunkMetadata::chunkLength).sum();
             if (bytes <= 0) {
                 continue;
             }
             String filename = sample.physicalFilename();
-            JfrTimeRange.TimeSpan span = resolveTimes(recordingId);
+            JfrTimeRange.TimeSpan span = eventSpan(entry.getValue());
+            if (span == null) {
+                span = resolveTimes(recordingId);
+            }
             RecordingSummary summary = new RecordingSummary(
                     filename,
                     fileSequence(filename),
@@ -218,9 +240,9 @@ public class RecordingCatalog {
                     contiguous.size(),
                     span == null ? null : span.startIso(),
                     span == null ? null : span.endIso(),
-                    reportUrl(sample.namespace(), podName, sample.containerName(), filename));
+                    reportUrl(sample.namespace(), sample.podName(), sample.containerName(), filename));
             recordings.add(new IndexedRecording(
-                    new WorkloadKey(sample.namespace(), podName, sample.containerName()),
+                    new WorkloadKey(sample.namespace(), sample.podName(), sample.containerName()),
                     recordingId,
                     summary,
                     span));
@@ -232,6 +254,28 @@ public class RecordingCatalog {
                 .thenComparingInt(recording -> recording.summary().sequence())
                 .thenComparing(recording -> recording.summary().filename()));
         return recordings;
+    }
+
+    private static JfrTimeRange.TimeSpan eventSpan(List<ChunkIndexRow> rows) {
+        long min = Long.MAX_VALUE;
+        long max = Long.MIN_VALUE;
+        boolean timed = false;
+        for (ChunkIndexRow row : rows) {
+            if (row.minEventStartNs() == 0 && row.maxEventEndNs() == 0) {
+                continue;
+            }
+            timed = true;
+            min = Math.min(min, row.minEventStartNs());
+            max = Math.max(max, row.maxEventEndNs());
+        }
+        if (!timed || max <= min) {
+            return null;
+        }
+        return JfrTimeRange.TimeSpan.of(nanos(min), nanos(max));
+    }
+
+    private static Instant nanos(long epochNs) {
+        return Instant.ofEpochSecond(Math.floorDiv(epochNs, 1_000_000_000L), Math.floorMod(epochNs, 1_000_000_000L));
     }
 
     private JfrTimeRange.TimeSpan resolveTimes(String recordingId) {

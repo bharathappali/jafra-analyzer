@@ -33,9 +33,13 @@ class IngestDurabilityTest {
         assertEquals(AckStatus.ACCEPTED, accepted.getStatus());
         assertTrue(store.contains(IngestSession.chunkId(open(payload.length))));
         assertEquals(0, registry.status().stitchedBytes());
-        assertTrue(Files.walk(root.resolve("recordings"))
-                .noneMatch(path -> path.getFileName().toString().equals("stitched.jfr")));
+        Path legacyRecordings = root.resolve("recordings");
+        if (Files.exists(legacyRecordings)) {
+            assertTrue(Files.walk(legacyRecordings)
+                    .noneMatch(path -> path.getFileName().toString().equals("stitched.jfr")));
+        }
 
+        store.close();
         ChunkStore restarted = new ChunkStore(root);
         restarted.recover();
         IngestRegistry afterRestart = new IngestRegistry(new SimpleMeterRegistry(), restarted, 8, 4096);
@@ -43,6 +47,7 @@ class IngestDurabilityTest {
         var ack = afterRestart.handle(replay, UploadRequest.newBuilder().setOpen(open(payload.length)).build());
         afterRestart.closeStream(replay);
         assertEquals(AckStatus.DUPLICATE, ack.getStatus());
+        restarted.close();
     }
 
     private static io.jafra.ingest.v1.UploadAck ingest(IngestRegistry registry, byte[] payload) throws Exception {

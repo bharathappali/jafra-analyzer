@@ -1,6 +1,8 @@
-package io.jafra.analyzer.storage;
+package io.jafra.analyzer.storage.legacy;
 
 import java.util.Locale;
+
+import io.jafra.analyzer.storage.ChunkMetadata;
 
 /**
  * Shared file name for a chunk's JFR bytes and its meta file.

@@ -6,25 +6,31 @@ chunk streams, persists each accepted chunk on the 5 GiB PVC at
 `/report` and `/summary` pass contiguous chunk files to JMC in stitch order.
 There is no second copy of those bytes.
 
-Durable identity is the chunk id in the file name, the same id the agent already sends. The agent can retry or the analyzer can restart; the same chunk id returns `DUPLICATE` and is not written again. `ACCEPTED` is returned only after the meta file is durable.
+Durable identity is the chunk id, the same id the agent already sends. The agent can retry or the analyzer can restart; the same chunk id returns `DUPLICATE` and is not written again. `ACCEPTED` is returned only after the chunk file, its JSON sidecar, and the index row are durable.
 
 ## PVC layout
 
 ```text
 /var/lib/jafra/analyzer/
-  tmp/<chunkId>.part                              # in-flight frames; discarded on abort/recover
-  data/<4-hour>/<search>-<chunkId>                # committed payload (durable)
-  meta/<4-hour>/<search>-<chunkId>                # same name as the payload
-  identities/<podUID>.json                        # namespace + pod name for HTTP queries
+  data/index.duckdb
+  data/tmp/<chunkId>.part
+  data/quarantine/<chunkId>.jfr
+  data/quarantine/<chunkId>.json
+  data/quarantine/<chunkId>.reason.txt
+  data/recordings/<cluster>/<namespace>/<pod>/<container>/chunks/<podUid>/default/<startHex>-<endHex>-<chunkId>.jfr
+  data/recordings/<cluster>/<namespace>/<pod>/<container>/chunks/<podUid>/default/<startHex>-<endHex>-<chunkId>.json
+  identities/<podUid>.json
 ```
 
-`<search>` is 60 characters: start and end time in seconds (8 hex digits each), then namespace, pod name, and container as the first three and last three letters written in hex, then the first 8 characters of the pod uid. `<chunkId>` is the existing duplicate key. The 4-hour folder is `startSeconds / 14400`, also 8 hex digits. The same name is used in `data/` and `meta/`.
+`data/index.duckdb` is the embedded index. It records each chunk's identity, header times, event time range, checksum, relative path, and status (`pending`, `stored`, `deleting`). HTTP listings read that index. An omitted `cluster` query parameter means cluster `default`.
 
-A query opens the 4-hour folders, lists names, and keeps files whose name matches the requested time, namespace, pod, and container. It opens meta only for those files. Startup does not load every meta into memory.
+`<startHex>` and `<endHex>` are epoch seconds, start rounded down and end rounded up, written as 8 hex digits. `default` after the pod uid is the JVM instance placeholder. The JSON sidecar is the same `ChunkMetadata` document as before.
 
-Files left in the old `chunks/<chunkId>.jfr` and `chunks/<chunkId>.meta` layout are moved into `data/` and `meta/` on startup. A payload with no meta is deleted. The move reads the JFR header once when the old meta has no start time.
+In-flight frames land in `data/tmp`. A cancelled stream, a checksum mismatch, or startup deletes the `.part` file. Quarantine holds legacy files that could not be migrated. Those files are never deleted by retention.
 
-Out-of-order chunks stay on disk until the hole at offset 0 is filled; only the contiguous prefix is passed to JMC. Startup deletes a leftover `stitch-cache/` directory from older builds. It never deletes `data/` or `meta/`.
+Startup migrates older layouts once, before ingest accepts uploads. v0.0.1 and v0.0.2 chunks live in `chunks/<chunkId>.jfr` plus `.meta`. The dev layout uses `data/<hex8>/` and `meta/<hex8>/`. Empty cluster ids become `default`. A missing pod name is filled only from `identities/`. A zero start time is filled from the JFR header. There is no downgrade from storage version 2 back to those layouts.
+
+Out-of-order chunks stay on disk until the hole at offset 0 is filled; only the contiguous prefix is passed to JMC.
 
 ## Build
 
@@ -48,7 +54,7 @@ kubectl exec -n jafra-system deploy/jafra-analyzer -- ls -la /var/lib/jafra/anal
 ```
 
 Restart the analyzer and confirm previously accepted IDs stay `DUPLICATE`
-(payloads remain under `data/`).
+(payloads remain under `data/recordings/`).
 
 Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 `GET /q/health`, `GET /q/metrics`). Status includes `durableChunks` and
@@ -59,7 +65,7 @@ Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 Recordings are indexed by **namespace**, **pod name**, and **container**.
 The HTTP API never uses JVM IDs. Pod UIDs stay on disk for uniqueness.
 
-Query any combination of filters:
+Query any combination of filters. Add `cluster` when the chunks were stored under a cluster other than `default`.
 
 ```bash
 kubectl -n jafra-system port-forward svc/jafra-analyzer 8080:8080

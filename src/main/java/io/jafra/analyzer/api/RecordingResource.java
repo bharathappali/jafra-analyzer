@@ -38,17 +38,21 @@ public class RecordingResource {
     @GET
     @Path("/recordings")
     public RecordingCatalog.RecordingListResponse list(
+            @QueryParam("cluster") String cluster,
             @QueryParam("namespace") String namespace,
             @QueryParam("pod") String pod,
             @QueryParam("container") String container) {
-        return catalog.list(namespace, pod, container);
+        return catalog.list(cluster, namespace, pod, container);
     }
 
     @GET
     @Path("/namespaces/{namespace}/pods/{pod}/containers/{container}")
     public RecordingCatalog.WorkloadRecordings workload(
-            @RestPath String namespace, @RestPath String pod, @RestPath String container) {
-        return catalog.requireWorkload(namespace, pod, container);
+            @RestPath String namespace,
+            @RestPath String pod,
+            @RestPath String container,
+            @QueryParam("cluster") String cluster) {
+        return catalog.requireWorkload(cluster, namespace, pod, container);
     }
 
     @GET
@@ -58,6 +62,7 @@ public class RecordingResource {
             @RestPath String namespace,
             @RestPath String pod,
             @RestPath String container,
+            @QueryParam("cluster") String cluster,
             @QueryParam("recording") String recording,
             @QueryParam("filter") String filter,
             @QueryParam("last") String last,
@@ -65,7 +70,7 @@ public class RecordingResource {
             @QueryParam("to") String to,
             @QueryParam("before") String before,
             @QueryParam("after") String after) {
-        return withSelection(namespace, pod, container, recording, last, from, to, before, after, selection -> {
+        return withSelection(cluster, namespace, pod, container, recording, last, from, to, before, after, selection -> {
             try {
                 return reports.report(
                         selection, reports.analyze(selection.chunkFiles(), filter, selection.from(), selection.to()));
@@ -82,6 +87,7 @@ public class RecordingResource {
             @RestPath String namespace,
             @RestPath String pod,
             @RestPath String container,
+            @QueryParam("cluster") String cluster,
             @QueryParam("recording") String recording,
             @QueryParam("filter") String filter,
             @QueryParam("last") String last,
@@ -89,7 +95,7 @@ public class RecordingResource {
             @QueryParam("to") String to,
             @QueryParam("before") String before,
             @QueryParam("after") String after) {
-        return withSelection(namespace, pod, container, recording, last, from, to, before, after, selection -> {
+        return withSelection(cluster, namespace, pod, container, recording, last, from, to, before, after, selection -> {
             try {
                 return summarizer.summarize(selection, filter);
             } catch (IOException error) {
@@ -106,8 +112,9 @@ public class RecordingResource {
             @RestPath String pod,
             @RestPath String container,
             @RestPath String filename,
+            @QueryParam("cluster") String cluster,
             @QueryParam("filter") String filter) {
-        return withSelection(namespace, pod, container, filename, null, null, null, null, null, selection -> {
+        return withSelection(cluster, namespace, pod, container, filename, null, null, null, null, null, selection -> {
             try {
                 return reports.report(
                         selection, reports.analyze(selection.chunkFiles(), filter, selection.from(), selection.to()));
@@ -125,8 +132,9 @@ public class RecordingResource {
             @RestPath String pod,
             @RestPath String container,
             @RestPath String filename,
+            @QueryParam("cluster") String cluster,
             @QueryParam("filter") String filter) {
-        return withSelection(namespace, pod, container, filename, null, null, null, null, null, selection -> {
+        return withSelection(cluster, namespace, pod, container, filename, null, null, null, null, null, selection -> {
             try {
                 return summarizer.summarize(selection, filter);
             } catch (IOException error) {
@@ -136,6 +144,7 @@ public class RecordingResource {
     }
 
     private <T> T withSelection(
+            String cluster,
             String namespace,
             String pod,
             String container,
@@ -158,15 +167,16 @@ public class RecordingResource {
         RecordingCatalog.WindowSelection selected;
         try {
             if (window != null) {
-                Optional<RecordingCatalog.WindowSelection> opened = catalog.openWindow(namespace, pod, container, window);
+                Optional<RecordingCatalog.WindowSelection> opened =
+                        catalog.openWindow(cluster, namespace, pod, container, window);
                 if (opened.isEmpty()) {
                     throw missingWindow(namespace, pod, container, window);
                 }
                 selected = opened.get();
             } else {
                 RecordingCatalog.IndexedRecording file = recording == null || recording.isBlank()
-                        ? catalog.latestClosed(namespace, pod, container)
-                        : catalog.requireRecording(namespace, pod, container, recording);
+                        ? catalog.latestClosed(cluster, namespace, pod, container)
+                        : catalog.requireRecording(cluster, namespace, pod, container, recording);
                 selected = catalog.singleFile(file);
             }
         } catch (IllegalArgumentException error) {
