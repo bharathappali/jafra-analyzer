@@ -17,18 +17,21 @@ Durable identity is the chunk id, the same id the agent already sends. The agent
   data/quarantine/<chunkId>.jfr
   data/quarantine/<chunkId>.json
   data/quarantine/<chunkId>.reason.txt
+  data/quarantine/<chunkId>.<n>.jfr
   data/recordings/<cluster>/<namespace>/<pod>/<container>/chunks/<podUid>/default/<startHex>-<endHex>-<chunkId>.jfr
   data/recordings/<cluster>/<namespace>/<pod>/<container>/chunks/<podUid>/default/<startHex>-<endHex>-<chunkId>.json
   identities/<podUid>.json
 ```
 
-`data/index.duckdb` is the embedded index. It records each chunk's identity, header times, event time range, checksum, relative path, and status (`pending`, `stored`, `deleting`). HTTP listings read that index. An omitted `cluster` query parameter means cluster `default`.
+`data/index.duckdb` is the embedded index. It records each chunk's identity, header times, event time range, checksum, relative path, and status (`pending`, `stored`, `deleting`). HTTP listings read that index. An omitted `cluster` query parameter lists every cluster. Pass `?cluster=` to keep one cluster. When the same namespace, pod, and container exist in more than one cluster and `cluster` is omitted, each listed recording includes `clusterId`.
 
 `<startHex>` and `<endHex>` are epoch seconds, start rounded down and end rounded up, written as 8 hex digits. `default` after the pod uid is the JVM instance placeholder. The JSON sidecar is the same `ChunkMetadata` document as before.
 
-In-flight frames land in `data/tmp`. A cancelled stream, a checksum mismatch, or startup deletes the `.part` file. Quarantine holds legacy files that could not be migrated. Those files are never deleted by retention.
+In-flight frames land in `data/tmp`. A cancelled stream, a checksum mismatch, or startup deletes the `.part` file. Quarantine holds legacy files that could not be migrated. Those files are never deleted by retention. The suffix is chosen by role, not by the legacy file name: payload bytes are `<id>.jfr`, the meta document is `<id>.json`, and the explanation is `<id>.reason.txt`. A name that is already taken gets `<id>.<n>.jfr` (or `.json` / `.reason.txt`) with `n` starting at 1, so a v0 copy and a v1 copy of the same chunk both stay on disk. When the chunk id cannot be read, the sanitized legacy file name is used instead of the id.
 
-Startup migrates older layouts once, before ingest accepts uploads. v0.0.1 and v0.0.2 chunks live in `chunks/<chunkId>.jfr` plus `.meta`. The dev layout uses `data/<hex8>/` and `meta/<hex8>/`. Empty cluster ids become `default`. A missing pod name is filled only from `identities/`. A zero start time is filled from the JFR header. There is no downgrade from storage version 2 back to those layouts.
+Startup opens the index and reconciles pending rows before it serves traffic. A legacy migration then runs on a background thread. Until that migration finishes, ingest answers `RETRY`, HTTP read APIs answer `503` with `Retry-After: 30`, and the Quarkus readiness check is down. Liveness stays up. A failed migration is logged and tried again after 60 seconds. v0.0.1 and v0.0.2 chunks live in `chunks/<chunkId>.jfr` plus `.meta`. The dev layout uses `data/<hex8>/` and `meta/<hex8>/`. Empty cluster ids become `default`. A missing pod name is filled only from `identities/`. A zero start time is filled from the JFR header. There is no downgrade from storage version 2 back to those layouts.
+
+`jafra.storage.retention` (for example `48h`) deletes stored chunks whose event window ended before that horizon. Leave it unset to keep every chunk. `jafra.index.decode-threads` (default `1`) is the pool that reads each stored chunk and widens its event range. `jafra.index.decode-rescan` (default `1m`) is how often chunks that are still undecoded are offered to that pool, 256 at a time.
 
 Out-of-order chunks stay on disk until the hole at offset 0 is filled; only the contiguous prefix is passed to JMC.
 
@@ -65,7 +68,7 @@ Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 Recordings are indexed by **namespace**, **pod name**, and **container**.
 The HTTP API never uses JVM IDs. Pod UIDs stay on disk for uniqueness.
 
-Query any combination of filters. Add `cluster` when the chunks were stored under a cluster other than `default`.
+Query any combination of filters. Omit `cluster` to list every cluster. Add `?cluster=` when the chunks should be limited to one cluster.
 
 ```bash
 kubectl -n jafra-system port-forward svc/jafra-analyzer 8080:8080

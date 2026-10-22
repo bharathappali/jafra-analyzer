@@ -1,6 +1,7 @@
 package io.jafra.analyzer.api;
 
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -181,6 +182,8 @@ public class RecordingResource {
             }
         } catch (IllegalArgumentException error) {
             throw badRequest(error.getMessage());
+        } catch (NoSuchFileException error) {
+            throw new jakarta.ws.rs.NotFoundException(error.getMessage());
         } catch (IOException error) {
             throw unavailable(namespace, pod, container, recording == null ? "window" : recording, error.getMessage());
         }

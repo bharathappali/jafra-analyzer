@@ -61,7 +61,10 @@ public final class ChunkPaths {
         if (value == null || value.isBlank()) {
             throw new InvalidIdentityException(label + " is empty");
         }
-        if (value.indexOf('/') >= 0 || value.indexOf('\\') >= 0 || value.contains("..")) {
+        if (value.equals(".")
+                || value.indexOf('/') >= 0
+                || value.indexOf('\\') >= 0
+                || value.contains("..")) {
             throw new InvalidIdentityException(label + " is not a single path segment");
         }
         for (int i = 0; i < value.length(); i++) {

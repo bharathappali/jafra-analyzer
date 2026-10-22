@@ -51,6 +51,8 @@ class ChunkPathsTest {
         assertThrows(InvalidIdentityException.class, () -> ChunkPaths.relative(metadata("pod", "ns", "pod", "uid\\x")));
         assertThrows(InvalidIdentityException.class, () -> ChunkPaths.relative(metadata("pod", "ns", "po\u0001d", "uid")));
         assertThrows(InvalidIdentityException.class, () -> ChunkPaths.relative(metadata("pod", "ns", "pod", "")));
+        assertThrows(InvalidIdentityException.class, () -> ChunkPaths.relative(metadata(".", "ns", "uid", "app")));
+        assertThrows(InvalidIdentityException.class, () -> ChunkPaths.relative(metadata("pod", ".", "uid", "app")));
     }
 
     private static ChunkMetadata metadata(String pod, String namespace, String podUid, String container) {
