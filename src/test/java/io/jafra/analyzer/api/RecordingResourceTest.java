@@ -3,6 +3,7 @@ package io.jafra.analyzer.api;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasSize;
@@ -153,6 +154,46 @@ class RecordingResourceTest {
     }
 
     @Test
+    void ambiguousClusterReadsConflictInsteadOfMerging() throws Exception {
+        byte[] recording = dumpRecording();
+        persist("amb-default", "default", "amb-ns", "amb-pod", "amb-app", "profile.jfr", recording);
+        persist("amb-c1", "c1", "amb-ns", "amb-pod", "amb-app", "profile.jfr", recording);
+        persist("amb-solo", "default", "solo-ns", "solo-pod", "solo-app", "profile-solo.jfr", recording);
+
+        given().when()
+                .get("/api/v1/namespaces/amb-ns/pods/amb-pod/containers/amb-app/report")
+                .then()
+                .statusCode(409)
+                .body("clusters", containsInAnyOrder("default", "c1"))
+                .body("hint", equalTo("pass ?cluster=<id>"));
+        given().when()
+                .get("/api/v1/namespaces/amb-ns/pods/amb-pod/containers/amb-app/recordings/profile.jfr/summary")
+                .then()
+                .statusCode(409)
+                .body("clusters", containsInAnyOrder("default", "c1"))
+                .body("hint", equalTo("pass ?cluster=<id>"));
+        given().when()
+                .queryParam("cluster", "c1")
+                .get("/api/v1/namespaces/amb-ns/pods/amb-pod/containers/amb-app/report")
+                .then()
+                .statusCode(200)
+                .body("recording", equalTo("profile.jfr"))
+                .body("recordings", contains("profile.jfr"))
+                .body("chunks", equalTo(1));
+        given().when()
+                .get("/api/v1/namespaces/amb-ns/pods/amb-pod/containers/amb-app")
+                .then()
+                .statusCode(200)
+                .body("recordings.filename", containsInAnyOrder("profile.jfr", "profile.jfr"))
+                .body("recordings.clusterId", containsInAnyOrder("default", "c1"));
+        given().when()
+                .get("/api/v1/namespaces/solo-ns/pods/solo-pod/containers/solo-app/report")
+                .then()
+                .statusCode(200)
+                .body("recording", equalTo("profile-solo.jfr"));
+    }
+
+    @Test
     void missingWorkloadIsNotFound() {
         given().when()
                 .get("/api/v1/namespaces/missing/pods/none/containers/none/report")
@@ -162,11 +203,17 @@ class RecordingResourceTest {
 
     private void persist(String chunkId, String namespace, String pod, String container, String filename, byte[] payload)
             throws Exception {
-        String recordingId = "local-demo/" + pod + "/" + container + "/" + filename;
+        persist(chunkId, "default", namespace, pod, container, filename, payload);
+    }
+
+    private void persist(
+            String chunkId, String cluster, String namespace, String pod, String container, String filename, byte[] payload)
+            throws Exception {
+        String recordingId = cluster + "/" + pod + "/" + container + "/" + filename;
         ChunkMetadata metadata = new ChunkMetadata(
                 chunkId,
                 recordingId,
-                "default",
+                cluster,
                 namespace,
                 "uid-" + pod,
                 pod,

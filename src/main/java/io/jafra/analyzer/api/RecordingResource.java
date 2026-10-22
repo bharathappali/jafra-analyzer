@@ -17,6 +17,7 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import io.jafra.analyzer.recordings.AmbiguousClusterException;
 import io.jafra.analyzer.recordings.JfrEventSummarizer;
 import io.jafra.analyzer.recordings.JfrReportGenerator;
 import io.jafra.analyzer.recordings.RecordingCatalog;
@@ -180,6 +181,8 @@ public class RecordingResource {
                         : catalog.requireRecording(cluster, namespace, pod, container, recording);
                 selected = catalog.singleFile(file);
             }
+        } catch (AmbiguousClusterException error) {
+            throw conflict(error.clusters());
         } catch (IllegalArgumentException error) {
             throw badRequest(error.getMessage());
         } catch (NoSuchFileException error) {
@@ -206,6 +209,15 @@ public class RecordingResource {
         body.put("error", "no recordings overlap the requested window");
         return new WebApplicationException(
                 Response.status(404).type(MediaType.APPLICATION_JSON).entity(body).build());
+    }
+
+    private static WebApplicationException conflict(java.util.List<String> clusters) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "conflict");
+        body.put("clusters", clusters);
+        body.put("hint", "pass ?cluster=<id>");
+        return new WebApplicationException(
+                Response.status(Response.Status.CONFLICT).type(MediaType.APPLICATION_JSON).entity(body).build());
     }
 
     private static WebApplicationException badRequest(String error) {

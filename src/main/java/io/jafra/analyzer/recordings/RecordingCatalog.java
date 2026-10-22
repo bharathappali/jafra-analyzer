@@ -84,6 +84,9 @@ public class RecordingCatalog {
         List<IndexedRecording> matches = index(cluster, namespace, pod, container).stream()
                 .filter(recording -> recording.summary().filename().equals(filename))
                 .toList();
+        if (cluster == null || cluster.isBlank()) {
+            rejectIfMany(clustersOf(matches));
+        }
         if (matches.size() != 1) {
             throw new NotFoundException("recording %s not found for namespace/%s/pod/%s/container/%s"
                     .formatted(filename, namespace, pod, container));
@@ -96,6 +99,9 @@ public class RecordingCatalog {
     }
 
     public IndexedRecording latestClosed(String cluster, String namespace, String pod, String container) {
+        if (cluster == null || cluster.isBlank()) {
+            rejectIfMany(clustersOf(index(null, namespace, pod, container)));
+        }
         WorkloadRecordings workload = requireWorkload(cluster, namespace, pod, container);
         List<RecordingSummary> recordings = workload.recordings();
         RecordingSummary selected = recordings.size() >= 2
@@ -120,6 +126,9 @@ public class RecordingCatalog {
             String container,
             ReportWindow window)
             throws IOException {
+        if (cluster == null || cluster.isBlank()) {
+            rejectIfMany(clustersOf(index(null, namespace, pod, container)));
+        }
         long fromNs = window.from() == null ? Long.MIN_VALUE : epochNanos(window.from());
         long toNs = window.to() == null ? Long.MAX_VALUE : epochNanos(window.to());
         List<IndexedRecording> ranged = index(cluster, namespace, pod, container, fromNs, toNs, true);
@@ -146,6 +155,25 @@ public class RecordingCatalog {
                     .formatted(namespace, pod, container));
         }
         return Optional.empty();
+    }
+
+    private static void rejectIfMany(Set<String> clusters) {
+        if (clusters.size() <= 1) {
+            return;
+        }
+        List<String> sorted = new ArrayList<>(clusters);
+        sorted.sort(Comparator.naturalOrder());
+        throw new AmbiguousClusterException(sorted);
+    }
+
+    private static Set<String> clustersOf(List<IndexedRecording> recordings) {
+        LinkedHashSet<String> clusters = new LinkedHashSet<>();
+        for (IndexedRecording recording : recordings) {
+            if (recording.clusterId() != null && !recording.clusterId().isBlank()) {
+                clusters.add(recording.clusterId());
+            }
+        }
+        return clusters;
     }
 
     private Optional<WindowSelection> openResolved(List<IndexedRecording> all, ReportWindow window) throws IOException {

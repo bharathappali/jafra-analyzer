@@ -171,6 +171,36 @@ class RecordingCatalogTest {
     }
 
     @Test
+    void ambiguousClusterReadsRefuseToMerge(@TempDir Path root) throws Exception {
+        CatalogFixture fixture = CatalogFixture.create(root);
+        Instant now = Instant.parse("2026-08-17T10:00:00Z");
+        byte[] payload = timedJfr(Instant.parse("2026-08-17T09:30:00Z"), Duration.ofMinutes(1));
+        persistCluster(fixture.store, "home", "default", "ns-a", "pod-a", "app", "profile-0.jfr", payload);
+        persistCluster(fixture.store, "away", "c1", "ns-a", "pod-a", "app", "profile-9.jfr", payload);
+        persistCluster(fixture.store, "solo", "default", "ns-solo", "pod-solo", "app", "profile-1.jfr", payload);
+        ReportWindow window = ReportWindow.parse(now, "2h", null, null, null, null);
+
+        AmbiguousClusterException open = assertThrows(
+                AmbiguousClusterException.class, () -> fixture.catalog.openWindow("ns-a", "pod-a", "app", window));
+        assertEquals(List.of("c1", "default"), open.clusters());
+        AmbiguousClusterException latest = assertThrows(
+                AmbiguousClusterException.class, () -> fixture.catalog.latestClosed("ns-a", "pod-a", "app"));
+        assertEquals(List.of("c1", "default"), latest.clusters());
+
+        RecordingCatalog.WindowSelection selected =
+                fixture.catalog.openWindow("c1", "ns-a", "pod-a", "app", window).orElseThrow();
+        assertEquals(List.of("profile-9.jfr"), filenames(selected));
+        assertEquals("c1", fixture.catalog.requireRecording("c1", "ns-a", "pod-a", "app", "profile-9.jfr").clusterId());
+        assertEquals("default", fixture.catalog.requireRecording("ns-a", "pod-a", "app", "profile-0.jfr").clusterId());
+
+        RecordingCatalog.WindowSelection alone =
+                fixture.catalog.openWindow("ns-solo", "pod-solo", "app", window).orElseThrow();
+        assertEquals(List.of("profile-1.jfr"), filenames(alone));
+        assertEquals(List.of("profile-0.jfr", "profile-9.jfr"), names(fixture.catalog.list(null, "ns-a", "pod-a", "app")));
+        fixture.store.close();
+    }
+
+    @Test
     void windowOpensOnlyTheChunkInsideTheRange(@TempDir Path root) throws Exception {
         CatalogFixture fixture = CatalogFixture.create(root);
         String recordingId = "rec-window";
@@ -292,6 +322,36 @@ class RecordingCatalogTest {
                 0,
                 payload.length,
                 "checksum");
+        ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
+        write.write(payload);
+        store.commit(write, metadata);
+    }
+
+    private static void persistCluster(
+            ChunkStore store,
+            String chunkId,
+            String cluster,
+            String namespace,
+            String pod,
+            String container,
+            String filename,
+            byte[] payload)
+            throws Exception {
+        long startNs = Instant.parse("2026-08-17T09:30:00Z").getEpochSecond() * 1_000_000_000L;
+        ChunkMetadata metadata = new ChunkMetadata(
+                chunkId,
+                cluster + "/" + pod + "/" + container + "/" + filename,
+                cluster,
+                namespace,
+                "uid",
+                pod,
+                container,
+                filename,
+                0,
+                payload.length,
+                "checksum",
+                startNs,
+                Duration.ofMinutes(1).toNanos());
         ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
         write.write(payload);
         store.commit(write, metadata);

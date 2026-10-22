@@ -68,7 +68,7 @@ Ports: `9090` gRPC, `8080` HTTP (`GET /health`, `GET /api/v1/status`,
 Recordings are indexed by **namespace**, **pod name**, and **container**.
 The HTTP API never uses JVM IDs. Pod UIDs stay on disk for uniqueness.
 
-Query any combination of filters. Omit `cluster` to list every cluster. Add `?cluster=` when the chunks should be limited to one cluster.
+Query any combination of filters. Omit `cluster` to list every cluster. A report, summary, or recording-file read that matches more than one cluster answers 409 with those cluster ids and does not merge them. Add `?cluster=` to choose one.
 
 ```bash
 kubectl -n jafra-system port-forward svc/jafra-analyzer 8080:8080
