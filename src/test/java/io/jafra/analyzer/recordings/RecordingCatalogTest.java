@@ -138,13 +138,13 @@ class RecordingCatalogTest {
     }
 
     @Test
-    void otherClusterIsHiddenUntilRequested(@TempDir Path root) throws Exception {
+    void omittedClusterListsEveryCluster(@TempDir Path root) throws Exception {
         CatalogFixture fixture = CatalogFixture.create(root);
         persist(fixture.store, "home", "ns-a", "pod-a", "app", "profile-0.jfr", new byte[] {1});
         ChunkMetadata other = new ChunkMetadata(
                 "away",
-                "other/uid/app/profile-9.jfr",
-                "other",
+                "c1/uid/app/profile-9.jfr",
+                "c1",
                 "ns-a",
                 "uid",
                 "pod-a",
@@ -157,8 +157,66 @@ class RecordingCatalogTest {
         write.write(new byte[] {9});
         fixture.store.commit(write, other);
 
-        assertEquals(List.of("profile-0.jfr"), names(fixture.catalog.list(null, "ns-a", "pod-a", "app")));
-        assertEquals(List.of("profile-9.jfr"), names(fixture.catalog.list("other", "ns-a", "pod-a", "app")));
+        RecordingCatalog.RecordingListResponse all = fixture.catalog.list(null, "ns-a", "pod-a", "app");
+        assertEquals(List.of("profile-0.jfr", "profile-9.jfr"), names(all));
+        assertEquals(
+                List.of("default", "c1"),
+                all.workloads().getFirst().recordings().stream()
+                        .map(RecordingCatalog.RecordingSummary::clusterId)
+                        .toList());
+        RecordingCatalog.RecordingListResponse only = fixture.catalog.list("c1", "ns-a", "pod-a", "app");
+        assertEquals(List.of("profile-9.jfr"), names(only));
+        assertEquals(null, only.workloads().getFirst().recordings().getFirst().clusterId());
+        fixture.store.close();
+    }
+
+    @Test
+    void windowOpensOnlyTheChunkInsideTheRange(@TempDir Path root) throws Exception {
+        CatalogFixture fixture = CatalogFixture.create(root);
+        String recordingId = "rec-window";
+        byte[] payload = new byte[] {1, 2, 3, 4};
+        persistAt(fixture.store, "before", recordingId, 0, payload, Instant.parse("2026-08-17T08:00:00Z"), Duration.ofMinutes(1));
+        persistAt(fixture.store, "inside", recordingId, payload.length, payload, Instant.parse("2026-08-17T09:00:00Z"), Duration.ofMinutes(1));
+        persistAt(fixture.store, "after", recordingId, payload.length * 2L, payload, Instant.parse("2026-08-17T10:00:00Z"), Duration.ofMinutes(1));
+
+        RecordingCatalog.WindowSelection selected = fixture.catalog.openWindow(
+                        "ns-a",
+                        "pod-a",
+                        "app",
+                        ReportWindow.parse(
+                                Instant.parse("2026-08-17T09:30:00Z"),
+                                null,
+                                "2026-08-17T09:00:00Z",
+                                "2026-08-17T09:30:00Z",
+                                null,
+                                null))
+                .orElseThrow();
+        assertEquals(1, selected.chunkFiles().size());
+        assertTrue(selected.chunkFiles().getFirst().toString().contains("inside"));
+        assertTrue(selected.chunkFiles().stream().noneMatch(path -> path.toString().contains("before")));
+        assertTrue(selected.chunkFiles().stream().noneMatch(path -> path.toString().contains("after")));
+        fixture.store.close();
+    }
+
+    @Test
+    void headerStartAfterTheWindowIsIncludedWhenEventsOverlap(@TempDir Path root) throws Exception {
+        CatalogFixture fixture = CatalogFixture.create(root);
+        Instant to = Instant.parse("2026-08-17T09:30:00Z");
+        Instant headerStart = Instant.parse("2026-08-17T10:00:00Z");
+        byte[] payload = new byte[] {1, 2, 3, 4};
+        persistAt(fixture.store, "late", "rec-late", 0, payload, headerStart, Duration.ofMinutes(1));
+        long toNs = to.getEpochSecond() * 1_000_000_000L;
+        assertTrue(fixture.store.index().get("late").startNs() >= toNs);
+
+        ReportWindow window = ReportWindow.parse(to, null, "2026-08-17T09:00:00Z", to.toString(), null, null);
+        assertTrue(fixture.catalog.openWindow("ns-a", "pod-a", "app", window).isEmpty());
+
+        long eventStart = Instant.parse("2026-08-17T09:10:00Z").getEpochSecond() * 1_000_000_000L;
+        fixture.store.index().updateEventRange("late", eventStart, eventStart + 1_000_000_000L);
+        assertTrue(fixture.store.index().get("late").startNs() >= toNs);
+        RecordingCatalog.WindowSelection selected = fixture.catalog.openWindow("ns-a", "pod-a", "app", window).orElseThrow();
+        assertEquals(1, selected.chunkFiles().size());
+        assertTrue(selected.chunkFiles().getFirst().toString().contains("late"));
         fixture.store.close();
     }
 
@@ -234,6 +292,35 @@ class RecordingCatalogTest {
                 0,
                 payload.length,
                 "checksum");
+        ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
+        write.write(payload);
+        store.commit(write, metadata);
+    }
+
+    private static void persistAt(
+            ChunkStore store,
+            String chunkId,
+            String recordingId,
+            long offset,
+            byte[] payload,
+            Instant start,
+            Duration duration)
+            throws Exception {
+        long startNs = start.getEpochSecond() * 1_000_000_000L + start.getNano();
+        ChunkMetadata metadata = new ChunkMetadata(
+                chunkId,
+                recordingId,
+                "default",
+                "ns-a",
+                "uid",
+                "pod-a",
+                "app",
+                "profile-0.jfr",
+                offset,
+                payload.length,
+                "checksum",
+                startNs,
+                duration.toNanos());
         ChunkStore.IncomingWrite write = store.beginWrite(chunkId);
         write.write(payload);
         store.commit(write, metadata);

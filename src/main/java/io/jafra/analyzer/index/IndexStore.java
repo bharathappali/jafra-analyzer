@@ -173,19 +173,28 @@ public class IndexStore {
 
     public synchronized void setStorageVersion(int version, long migrated, long quarantined, long dropped)
             throws IOException {
-        try (PreparedStatement delete = connection.prepareStatement("DELETE FROM schema_version");
-                PreparedStatement insert = connection.prepareStatement("""
-                        INSERT INTO schema_version (storage_version, migrated, quarantined, dropped, migrated_at)
-                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """)) {
-            delete.executeUpdate();
-            insert.setInt(1, version);
-            insert.setLong(2, migrated);
-            insert.setLong(3, quarantined);
-            insert.setLong(4, dropped);
-            insert.executeUpdate();
+        boolean previous = true;
+        try {
+            previous = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try (PreparedStatement delete = connection.prepareStatement("DELETE FROM schema_version");
+                    PreparedStatement insert = connection.prepareStatement("""
+                            INSERT INTO schema_version (storage_version, migrated, quarantined, dropped, migrated_at)
+                            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                            """)) {
+                delete.executeUpdate();
+                insert.setInt(1, version);
+                insert.setLong(2, migrated);
+                insert.setLong(3, quarantined);
+                insert.setLong(4, dropped);
+                insert.executeUpdate();
+            }
+            connection.commit();
         } catch (SQLException error) {
+            rollbackQuietly();
             throw io(error);
+        } finally {
+            restoreAutoCommit(previous);
         }
     }
 
@@ -205,12 +214,20 @@ public class IndexStore {
         }
     }
 
+    /**
+     * Stored chunks whose event window overlaps {@code [fromNs, toNs)}. A null or blank cluster
+     * does not filter by cluster.
+     */
     public List<ChunkIndexRow> findRange(
             String cluster, String namespace, String pod, String container, long fromNs, long toNs)
             throws IOException {
-        StringBuilder sql = new StringBuilder("SELECT " + COLUMNS + " FROM chunks WHERE cluster_id = ? AND status = ?");
+        StringBuilder sql = new StringBuilder("SELECT " + COLUMNS + " FROM chunks WHERE status = ?");
         sql.append(" AND min_event_start_ns < ? AND max_event_end_ns > ?");
         List<String> filters = new ArrayList<>();
+        if (present(cluster)) {
+            sql.append(" AND cluster_id = ?");
+            filters.add(cluster);
+        }
         if (present(namespace)) {
             sql.append(" AND namespace = ?");
             filters.add(namespace);
@@ -226,12 +243,50 @@ public class IndexStore {
         sql.append(" ORDER BY start_ns");
         try (Connection read = readConnection();
                 PreparedStatement statement = read.prepareStatement(sql.toString())) {
-            statement.setString(1, cluster);
-            statement.setString(2, ChunkIndexRow.STATUS_STORED);
-            statement.setLong(3, toNs);
-            statement.setLong(4, fromNs);
+            statement.setString(1, ChunkIndexRow.STATUS_STORED);
+            statement.setLong(2, toNs);
+            statement.setLong(3, fromNs);
             for (int i = 0; i < filters.size(); i++) {
-                statement.setString(5 + i, filters.get(i));
+                statement.setString(4 + i, filters.get(i));
+            }
+            return readRows(statement);
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    /**
+     * Stored chunks whose event window is still the unset {@code 0,0} pair. Callers that have a
+     * request window still have to read those headers; every other chunk goes through
+     * {@link #findRange}.
+     */
+    public List<ChunkIndexRow> findUndated(String cluster, String namespace, String pod, String container)
+            throws IOException {
+        StringBuilder sql = new StringBuilder(
+                "SELECT " + COLUMNS + " FROM chunks WHERE status = ? AND min_event_start_ns = 0 AND max_event_end_ns = 0");
+        List<String> filters = new ArrayList<>();
+        if (present(cluster)) {
+            sql.append(" AND cluster_id = ?");
+            filters.add(cluster);
+        }
+        if (present(namespace)) {
+            sql.append(" AND namespace = ?");
+            filters.add(namespace);
+        }
+        if (present(pod)) {
+            sql.append(" AND pod_name = ?");
+            filters.add(pod);
+        }
+        if (present(container)) {
+            sql.append(" AND container_name = ?");
+            filters.add(container);
+        }
+        sql.append(" ORDER BY start_ns");
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql.toString())) {
+            statement.setString(1, ChunkIndexRow.STATUS_STORED);
+            for (int i = 0; i < filters.size(); i++) {
+                statement.setString(2 + i, filters.get(i));
             }
             return readRows(statement);
         } catch (SQLException error) {
@@ -295,11 +350,19 @@ public class IndexStore {
         return rowsByStatus(ChunkIndexRow.STATUS_DELETING);
     }
 
-    public List<String> undecodedChunkIds() throws IOException {
-        String sql = "SELECT chunk_id FROM chunks WHERE status = ? AND decoded_at IS NULL ORDER BY chunk_id";
+    /** Oldest stored chunks that have not been decoded yet, at most {@code limit} of them. */
+    public List<String> undecodedChunkIds(int limit) throws IOException {
+        int capped = Math.max(1, limit);
+        String sql = """
+                SELECT chunk_id FROM chunks
+                WHERE status = ? AND decoded_at IS NULL
+                ORDER BY received_at
+                LIMIT ?
+                """;
         try (Connection read = readConnection();
                 PreparedStatement statement = read.prepareStatement(sql)) {
             statement.setString(1, ChunkIndexRow.STATUS_STORED);
+            statement.setInt(2, capped);
             try (ResultSet rows = statement.executeQuery()) {
                 List<String> ids = new ArrayList<>();
                 while (rows.next()) {
@@ -581,6 +644,26 @@ public class IndexStore {
             statement.setNull(index, Types.BIGINT);
         } else {
             statement.setLong(index, value);
+        }
+    }
+
+    private void rollbackQuietly() {
+        try {
+            if (connection != null && !connection.getAutoCommit()) {
+                connection.rollback();
+            }
+        } catch (SQLException ignored) {
+            // The original failure is the one returned to the caller.
+        }
+    }
+
+    private void restoreAutoCommit(boolean previous) {
+        try {
+            if (connection != null) {
+                connection.setAutoCommit(previous);
+            }
+        } catch (SQLException ignored) {
+            // The connection stays usable for the next synchronized write.
         }
     }
 
