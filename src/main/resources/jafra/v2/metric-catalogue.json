@@ -1,0 +1,8566 @@
+{
+ "version": "v2.0",
+ "frozen": "2026-10-22",
+ "groups": [
+  "cpu",
+  "heap",
+  "gc",
+  "metaspace",
+  "codecache",
+  "nmt",
+  "container",
+  "threads",
+  "locks",
+  "vt",
+  "safepoint",
+  "jit",
+  "classes",
+  "socket",
+  "file",
+  "exceptions",
+  "alloc",
+  "endpoint"
+ ],
+ "conventions": {
+  "naming": "group.measure.unit (overview keys kept verbatim as locked)",
+  "durations": "\u00b5s",
+  "histogram": "log buckets ratio 1.02, 1 \u00b5s\u20131 h, ~1,100 sparse buckets + under/overflow; percentiles only where histogram=true",
+  "rollup": "5 s rows + precomputed 1 min rows; other steps at query time",
+  "producers": "jdk = JFR via the shared JFCs; async-profiler = AP 4.5 writes these event names itself (JFC sets them enabled=false)",
+  "flags": {
+   "estimate": "async-profiler sampled value (cpu, alloc, lock, wall)",
+   "lower_bound": "thresholded JDK event: only calls over the profile threshold are recorded",
+   "opt_in_nmt": "needs pod annotation jafra.io/jdk-nmt: \"enabled\"; not readable on JDK 17"
+  },
+  "jdk_rule": "jdk lists the versions whose jfr metadata (17.0.20, 21.0.12, 25.0.4) contains the primary source event; per-field limits are in notes"
+ },
+ "metrics": [
+  {
+   "name": "cpu.used.cores",
+   "group": "cpu",
+   "unit": "cores",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": "cpu.limit.cores",
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerCPUUsage",
+    "field": "cpuTime",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394cpuTime(ns)/\u0394t(ns) per 5 s file (U)",
+   "flags": [],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.user.cores",
+   "group": "cpu",
+   "unit": "cores",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerCPUUsage",
+    "field": "cpuUserTime",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394cpuUserTime/\u0394t",
+   "flags": [],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.system.cores",
+   "group": "cpu",
+   "unit": "cores",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerCPUUsage",
+    "field": "cpuSystemTime",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394cpuSystemTime/\u0394t",
+   "flags": [],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.limit.cores",
+   "group": "cpu",
+   "unit": "cores",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerConfiguration",
+    "field": "cpuQuota",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "beginChunk"
+     },
+     "medium": {
+      "period": "beginChunk"
+     },
+     "low": {
+      "period": "beginChunk"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ContainerConfiguration",
+     "field": "cpuSlicePeriod",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    },
+    {
+     "event": "jdk.ContainerConfiguration",
+     "field": "effectiveCpuCount",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "cpuQuota/cpuSlicePeriod (both \u00b5s); if cpuQuota<0 (no limit) use effectiveCpuCount (L)",
+   "flags": [],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.container.pct_limit",
+   "group": "cpu",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerCPUUsage",
+    "field": "cpuTime",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ContainerConfiguration",
+     "field": "cpuQuota",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    },
+    {
+     "event": "jdk.ContainerConfiguration",
+     "field": "cpuSlicePeriod",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "100\u00b7U/L, U = \u0394ContainerCPUUsage.cpuTime/\u0394t, L = cpu.limit.cores",
+   "flags": [],
+   "note": "Measures the container cgroup (the JVM is its main process), not the JVM process alone.",
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "cpu.throttled.pct",
+   "group": "cpu",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerCPUThrottling",
+    "field": "cpuThrottledSlices",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ContainerCPUThrottling",
+     "field": "cpuElapsedSlices",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "endChunk"
+      },
+      "medium": {
+       "period": "endChunk"
+      },
+      "low": {
+       "period": "endChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "\u03b8 = 100\u00b7\u0394cpuThrottledSlices/\u0394cpuElapsedSlices; only when \u0394cpuElapsedSlices \u2265 n_min (ratio guard)",
+   "flags": [],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.throttled.s_per_s",
+   "group": "cpu",
+   "unit": "s_per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerCPUThrottling",
+    "field": "cpuThrottledTime",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u03c4 = \u0394cpuThrottledTime(ns)/\u0394t(ns)",
+   "flags": [],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.jvm_user.pct",
+   "group": "cpu",
+   "unit": "pct",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CPULoad",
+    "field": "jvmUser",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "100\u00b7jvmUser (fraction of all CPUs the JVM sees)",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false,
+   "note": "Container scaling of jdk.CPULoad not yet verified on a real pod."
+  },
+  {
+   "name": "cpu.jvm_system.pct",
+   "group": "cpu",
+   "unit": "pct",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CPULoad",
+    "field": "jvmSystem",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "100\u00b7jvmSystem",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false,
+   "note": "Container scaling of jdk.CPULoad not yet verified on a real pod."
+  },
+  {
+   "name": "cpu.machine.pct",
+   "group": "cpu",
+   "unit": "pct",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CPULoad",
+    "field": "machineTotal",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "100\u00b7machineTotal",
+   "flags": [],
+   "charts": [
+    "cpu-limit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.thread.pct",
+   "group": "cpu",
+   "unit": "pct",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "thread",
+    "pool"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ThreadCPULoad",
+    "field": "user",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ThreadCPULoad",
+     "field": "system",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "1 s"
+      },
+      "medium": {
+       "period": "endChunk"
+      },
+      "low": {
+       "period": "endChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "100\u00b7(user+system) per eventThread; pool = thread-name prefix",
+   "flags": [],
+   "charts": [
+    "cpu-threads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "cpu.samples.count",
+   "group": "cpu",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [
+    "thread",
+    "frame",
+    "state"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ExecutionSample",
+    "field": "stackTrace",
+    "producer": "async-profiler",
+    "period_or_threshold": {
+     "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+    }
+   },
+   "derivation": "async-profiler CPU samples; shares only, not CPU time",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "cpu-flame"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.used.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": "heap.max.bytes",
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapMemoryUsage",
+    "field": "used",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GCHeapSummary",
+     "field": "heapUsed",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     },
+     "jdk": [
+      17
+     ],
+     "role": "JDK 17 fallback: per-GC before/after points only"
+    }
+   ],
+   "derivation": "21/25: GCHeapMemoryUsage.used every 1 s; 17: GCHeapSummary.heapUsed at each GC",
+   "flags": [],
+   "charts": [
+    "heap-used"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.committed.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapMemoryUsage",
+    "field": "committed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GCHeapSummary",
+     "field": "heapSpace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     },
+     "jdk": [
+      17
+     ],
+     "role": "JDK 17 fallback: heapSpace.committedSize per GC"
+    }
+   ],
+   "flags": [],
+   "charts": [
+    "heap-used",
+    "memory-limits"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.max.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapConfiguration",
+    "field": "maxSize",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "beginChunk"
+     },
+     "medium": {
+      "period": "beginChunk"
+     },
+     "low": {
+      "period": "beginChunk"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GCHeapMemoryUsage",
+     "field": "max",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "1 s"
+      },
+      "medium": {
+       "period": "1 s"
+      },
+      "low": {
+       "period": "1 s"
+      }
+     }
+    }
+   ],
+   "derivation": "GCHeapConfiguration.maxSize (-Xmx); GCHeapMemoryUsage.max on 21/25",
+   "flags": [],
+   "charts": [
+    "heap-used",
+    "heap-live"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.used.pct_max",
+   "group": "heap",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapMemoryUsage",
+    "field": "used",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GCHeapConfiguration",
+     "field": "maxSize",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    },
+    {
+     "event": "jdk.GCHeapSummary",
+     "field": "heapUsed",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     },
+     "jdk": [
+      17
+     ]
+    }
+   ],
+   "derivation": "100\u00b7heap.used.bytes/heap.max.bytes",
+   "flags": [],
+   "charts": [
+    "heap-used"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "heap.pool.used.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "pool"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapMemoryPoolUsage",
+    "field": "used",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "per memory pool name (eden, survivor, old); split only for collectors that expose pools",
+   "flags": [],
+   "charts": [
+    "heap-spaces"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.pool.committed.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "pool"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapMemoryPoolUsage",
+    "field": "committed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "heap-spaces"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.space.used.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "space",
+    "when"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.G1HeapSummary",
+    "field": "edenUsedSize",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.G1HeapSummary",
+     "field": "survivorUsedSize",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    },
+    {
+     "event": "jdk.G1HeapSummary",
+     "field": "oldGenUsedSize",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     },
+     "jdk": [
+      21,
+      25
+     ]
+    },
+    {
+     "event": "jdk.PSHeapSummary",
+     "field": "edenSpace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    },
+    {
+     "event": "jdk.PSHeapSummary",
+     "field": "oldObjectSpace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    },
+    {
+     "event": "jdk.GCHeapSummary",
+     "field": "heapUsed",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ],
+   "derivation": "G1: eden/survivor/old used before and after each GC (17: old = heapUsed \u2212 eden \u2212 survivor); Parallel: PSHeapSummary spaces; other collectors: total only",
+   "flags": [],
+   "charts": [
+    "heap-spaces",
+    "compaction"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.after_gc.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "count"
+   ],
+   "by": [
+    "collector"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapSummary",
+    "field": "heapUsed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "Lv = heapUsed where when=\"After GC\"; per window take the min",
+   "flags": [],
+   "charts": [
+    "heap-live"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.before_gc.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "count"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapSummary",
+    "field": "heapUsed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "heapUsed where when=\"Before GC\"",
+   "flags": [],
+   "charts": [
+    "heap-live"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.occupancy.pct",
+   "group": "heap",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapSummary",
+    "field": "heapUsed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GCHeapConfiguration",
+     "field": "maxSize",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "o = 100\u00b7Lv/heap.max.bytes",
+   "flags": [],
+   "charts": [
+    "heap-live"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.promotion.bytes_per_s",
+   "group": "heap",
+   "unit": "bytes_per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.G1HeapSummary",
+    "field": "oldGenUsedSize",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    },
+    "jdk": [
+     21,
+     25
+    ]
+   },
+   "inputs": [
+    {
+     "event": "jdk.PSHeapSummary",
+     "field": "oldObjectSpace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    },
+    {
+     "event": "jdk.GCHeapSummary",
+     "field": "heapUsed",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ],
+   "derivation": "P = \u0394 old used across young GCs / \u0394t; JDK 17 G1: P \u2248 \u0394Lv per young GC (estimate)",
+   "flags": [],
+   "note": "G1 and Parallel only",
+   "charts": [
+    "heap-spaces"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "heap.survivor_age.bytes",
+   "group": "heap",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "age"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.TenuringDistribution",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "bytes per object age after each young GC",
+   "flags": [],
+   "note": "Emitted only by collectors that use age tenuring (G1, Serial, Parallel)",
+   "charts": [
+    "heap-spaces"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "alloc.rate.bytes_per_s",
+   "group": "alloc",
+   "unit": "bytes_per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [
+    "thread",
+    "pool"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ThreadAllocationStatistics",
+    "field": "allocated",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "A = \u03a3_threads \u0394allocated/\u0394t (exact, endChunk)",
+   "flags": [],
+   "charts": [
+    "alloc-classes"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "alloc.sampled.bytes",
+   "group": "alloc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "class",
+    "site",
+    "thread"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ObjectAllocationInNewTLAB",
+    "field": "allocationSize",
+    "producer": "async-profiler",
+    "period_or_threshold": {
+     "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ObjectAllocationInNewTLAB",
+     "field": "tlabSize",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.ObjectAllocationOutsideTLAB",
+     "field": "allocationSize",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "derivation": "bytes(key) \u2248 w_key/\u03a3w \u00b7 A \u00b7 \u0394t (counter-partner rule; w = AP alloc sample weight)",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "alloc-classes",
+    "alloc-sites",
+    "alloc-flame"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "alloc.gc_trigger.count",
+   "group": "alloc",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [
+    "site"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.AllocationRequiringGC",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "allocations that triggered a GC, site = first non-JDK frame of stackTrace",
+   "flags": [],
+   "charts": [
+    "alloc-sites"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.pause.us",
+   "group": "gc",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "collector",
+    "cause"
+   ],
+   "histogram": true,
+   "histogram_family": "gc_pause",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCPhasePause",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GarbageCollection",
+     "field": "name",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     },
+     "role": "by=collector via gcId"
+    },
+    {
+     "event": "jdk.GarbageCollection",
+     "field": "cause",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     },
+     "role": "by=cause via gcId"
+    },
+    {
+     "event": "jdk.GarbageCollection",
+     "field": "longestPause",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "each stop-the-world pause (GCPhasePause, threshold 0), joined on gcId for collector/cause",
+   "flags": [],
+   "charts": [
+    "gc-pauses"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.pause.time_pct",
+   "group": "gc",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GarbageCollection",
+    "field": "sumOfPauses",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "derivation": "\u03a0 = 100\u00b7\u03a3 sumOfPauses in window / \u0394t",
+   "flags": [],
+   "charts": [
+    "gc-pauses"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "gc.count.per_s",
+   "group": "gc",
+   "unit": "per_s",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "collector",
+    "cause"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GarbageCollection",
+    "field": "gcId",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.YoungGarbageCollection",
+     "field": "gcId",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.OldGarbageCollection",
+     "field": "gcId",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.G1GarbageCollection",
+     "field": "type",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "f = #GarbageCollection/\u0394t; by collector = name, young/old from Young/OldGarbageCollection, G1 type",
+   "flags": [],
+   "charts": [
+    "gc-pauses"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.full.count",
+   "group": "gc",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.OldGarbageCollection",
+    "field": "gcId",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.G1GarbageCollection",
+     "field": "type",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "full/old GCs; on G1 only G1GarbageCollection.type=Full",
+   "flags": [],
+   "charts": [
+    "gc-pauses",
+    "compaction"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.cpu.pct",
+   "group": "gc",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCCPUTime",
+    "field": "userTime",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GCCPUTime",
+     "field": "systemTime",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    },
+    {
+     "event": "jdk.ContainerCPUUsage",
+     "field": "cpuTime",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "endChunk"
+      },
+      "medium": {
+       "period": "endChunk"
+      },
+      "low": {
+       "period": "endChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "c = 100\u00b7\u03a3(userTime+systemTime)/(U\u00b7\u0394t)",
+   "flags": [],
+   "charts": [
+    "gc-pauses"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.freed.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "sum",
+    "count"
+   ],
+   "by": [
+    "collector"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCHeapSummary",
+    "field": "heapUsed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "F = before.heapUsed \u2212 after.heapUsed per gcId",
+   "flags": [],
+   "charts": [
+    "gc-freed"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.copied.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "sum",
+    "count"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.EvacuationInformation",
+    "field": "bytesCopied",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "bytes copied per GC (G1)",
+   "flags": [],
+   "charts": [
+    "gc-freed"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.shenandoah.collected.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "sum",
+    "count"
+   ],
+   "by": [
+    "gen"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.ShenandoahEvacuationInformation",
+    "field": "collectedYoung",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ShenandoahEvacuationInformation",
+     "field": "collectedOld",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ],
+   "flags": [],
+   "charts": [
+    "gc-freed"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.phase.us",
+   "group": "gc",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "phase",
+    "kind"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCPhasePause",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.GCPhasePauseLevel1",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.GCPhaseConcurrent",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.GCPhaseConcurrentLevel1",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "phase = name; kind = pause|concurrent. No histogram: percentiles not allowed",
+   "flags": [],
+   "charts": [
+    "gc-phases"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.references.count",
+   "group": "gc",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "avg",
+    "max"
+   ],
+   "by": [
+    "type"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.GCReferenceStatistics",
+    "field": "count",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "flags": [],
+   "charts": [
+    "gc-phases"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.zgc.reloc_set.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "sum",
+    "count"
+   ],
+   "by": [
+    "part"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ZRelocationSet",
+    "field": "total",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ZRelocationSet",
+     "field": "empty",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.ZRelocationSet",
+     "field": "relocate",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "part = total|empty|relocate",
+   "flags": [],
+   "charts": [
+    "zgc-reloc"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.zgc.reloc_group.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "sum",
+    "count"
+   ],
+   "by": [
+    "page_type"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ZRelocationSetGroup",
+    "field": "relocate",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ZRelocationSetGroup",
+     "field": "total",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "flags": [],
+   "charts": [
+    "zgc-pages"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.zgc.reloc_group.pages",
+   "group": "gc",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "sum"
+   ],
+   "by": [
+    "page_type"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ZRelocationSetGroup",
+    "field": "selectedPages",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ZRelocationSetGroup",
+     "field": "candidatePages",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "flags": [],
+   "charts": [
+    "zgc-pages"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.zgc.page_alloc.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "count",
+    "max"
+   ],
+   "by": [
+    "page_type"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ZPageAllocation",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "1 ms"
+     },
+     "medium": {
+      "threshold": "5 ms"
+     },
+     "low": {
+      "threshold": "10 ms"
+     }
+    }
+   },
+   "derivation": "only page allocations slower than the threshold",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "zgc-alloc"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.zgc.uncommit.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "count",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ZUncommit",
+    "field": "uncommitted",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "zgc-alloc"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.zgc.unmap.bytes",
+   "group": "gc",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "count",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21
+   ],
+   "source": {
+    "event": "jdk.ZUnmap",
+    "field": "unmapped",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "zgc-alloc"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "gc.zgc.stall.us",
+   "group": "gc",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "type"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ZAllocationStall",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "derivation": "ZGC allocation stalls (threshold 0); no histogram",
+   "flags": [],
+   "charts": [
+    "zgc-alloc"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "metaspace.used.bytes",
+   "group": "metaspace",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": "MaxMetaspaceSize",
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.MetaspaceSummary",
+    "field": "metaspace",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    },
+    "subfield": "used"
+   },
+   "derivation": "M = metaspace.used when=\"After GC\" (1 point per GC); trend only when MaxMetaspaceSize is set",
+   "flags": [],
+   "charts": [
+    "metaspace"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "metaspace.committed.bytes",
+   "group": "metaspace",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.MetaspaceSummary",
+    "field": "metaspace",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    },
+    "subfield": "committed"
+   },
+   "flags": [],
+   "charts": [
+    "metaspace"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "metaspace.class_space.used.bytes",
+   "group": "metaspace",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.MetaspaceSummary",
+    "field": "classSpace",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    },
+    "subfield": "used"
+   },
+   "flags": [],
+   "charts": [
+    "metaspace"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "metaspace.gc_threshold.bytes",
+   "group": "metaspace",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.MetaspaceSummary",
+    "field": "gcThreshold",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.MetaspaceGCThreshold",
+     "field": "newValue",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ],
+   "flags": [],
+   "charts": [
+    "metaspace"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "codecache.used.bytes",
+   "group": "codecache",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "code_heap"
+   ],
+   "histogram": false,
+   "trend": true,
+   "limit": "codecache.reserved.bytes",
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CodeCacheStatistics",
+    "field": "unallocatedCapacity",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "5 s"
+     },
+     "medium": {
+      "period": "10 s"
+     },
+     "low": {
+      "period": "30 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.CodeCacheStatistics",
+     "field": "reservedTopAddress",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "5 s"
+      },
+      "medium": {
+       "period": "10 s"
+      },
+      "low": {
+       "period": "30 s"
+      }
+     }
+    },
+    {
+     "event": "jdk.CodeCacheStatistics",
+     "field": "startAddress",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "5 s"
+      },
+      "medium": {
+       "period": "10 s"
+      },
+      "low": {
+       "period": "30 s"
+      }
+     }
+    }
+   ],
+   "derivation": "used = (reservedTopAddress \u2212 startAddress) \u2212 unallocatedCapacity; code_heap = codeBlobType",
+   "flags": [],
+   "charts": [
+    "code-cache"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "codecache.reserved.bytes",
+   "group": "codecache",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "code_heap"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CodeCacheStatistics",
+    "field": "reservedTopAddress",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "5 s"
+     },
+     "medium": {
+      "period": "10 s"
+     },
+     "low": {
+      "period": "30 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.CodeCacheStatistics",
+     "field": "startAddress",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "5 s"
+      },
+      "medium": {
+       "period": "10 s"
+      },
+      "low": {
+       "period": "30 s"
+      }
+     }
+    },
+    {
+     "event": "jdk.CodeCacheConfiguration",
+     "field": "reservedSize",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "reservedTopAddress \u2212 startAddress per segment; total = CodeCacheConfiguration.reservedSize",
+   "flags": [],
+   "charts": [
+    "code-cache"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "codecache.used.pct_reserved",
+   "group": "codecache",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "code_heap"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CodeCacheStatistics",
+    "field": "unallocatedCapacity",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "5 s"
+     },
+     "medium": {
+      "period": "10 s"
+     },
+     "low": {
+      "period": "30 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.CodeCacheStatistics",
+     "field": "reservedTopAddress",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "5 s"
+      },
+      "medium": {
+       "period": "10 s"
+      },
+      "low": {
+       "period": "30 s"
+      }
+     }
+    },
+    {
+     "event": "jdk.CodeCacheStatistics",
+     "field": "startAddress",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "5 s"
+      },
+      "medium": {
+       "period": "10 s"
+      },
+      "low": {
+       "period": "30 s"
+      }
+     }
+    }
+   ],
+   "derivation": "\u03c6 = 100\u00b7(1 \u2212 \u03a3 unallocatedCapacity / \u03a3(reservedTopAddress \u2212 startAddress))",
+   "flags": [],
+   "charts": [
+    "code-cache"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "codecache.methods.count",
+   "group": "codecache",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "code_heap"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CodeCacheStatistics",
+    "field": "methodCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "5 s"
+     },
+     "medium": {
+      "period": "10 s"
+     },
+     "low": {
+      "period": "30 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "code-cache"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "codecache.full.count",
+   "group": "codecache",
+   "unit": "count",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [
+    "code_heap"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CodeCacheStatistics",
+    "field": "fullCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "5 s"
+     },
+     "medium": {
+      "period": "10 s"
+     },
+     "low": {
+      "period": "30 s"
+     }
+    }
+   },
+   "derivation": "\u0394fullCount per window",
+   "flags": [],
+   "charts": [
+    "code-cache"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.committed.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": "container.limit.bytes",
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.NativeMemoryUsageTotal",
+    "field": "committed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "N = NativeMemoryUsageTotal.committed",
+   "flags": [
+    "opt_in_nmt"
+   ],
+   "note": "NMT needs -XX:NativeMemoryTracking (pod annotation jafra.io/jdk-nmt: \"enabled\"); events do not exist on JDK 17",
+   "charts": [
+    "nmt",
+    "memory-limits"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "nmt.reserved.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.NativeMemoryUsageTotal",
+    "field": "reserved",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [
+    "opt_in_nmt"
+   ],
+   "note": "NMT needs -XX:NativeMemoryTracking (pod annotation jafra.io/jdk-nmt: \"enabled\"); events do not exist on JDK 17",
+   "charts": [
+    "nmt"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.category.committed.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "category"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.NativeMemoryUsage",
+    "field": "committed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "5 s"
+     },
+     "low": {
+      "period": "10 s"
+     }
+    }
+   },
+   "derivation": "category = type",
+   "flags": [
+    "opt_in_nmt"
+   ],
+   "note": "NMT needs -XX:NativeMemoryTracking (pod annotation jafra.io/jdk-nmt: \"enabled\"); events do not exist on JDK 17",
+   "charts": [
+    "nmt"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.category.reserved.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "category"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.NativeMemoryUsage",
+    "field": "reserved",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "5 s"
+     },
+     "low": {
+      "period": "10 s"
+     }
+    }
+   },
+   "flags": [
+    "opt_in_nmt"
+   ],
+   "note": "NMT needs -XX:NativeMemoryTracking (pod annotation jafra.io/jdk-nmt: \"enabled\"); events do not exist on JDK 17",
+   "charts": [
+    "nmt"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.untracked.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ResidentSetSize",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.NativeMemoryUsageTotal",
+     "field": "committed",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "1 s"
+      },
+      "medium": {
+       "period": "1 s"
+      },
+      "low": {
+       "period": "1 s"
+      }
+     }
+    }
+   ],
+   "derivation": "u = RSS \u2212 N",
+   "flags": [
+    "opt_in_nmt"
+   ],
+   "charts": [
+    "nmt"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.estimate.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ResidentSetSize",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ContainerMemoryUsage",
+     "field": "memoryUsage",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "1 s"
+      },
+      "medium": {
+       "period": "1 s"
+      },
+      "low": {
+       "period": "1 s"
+      }
+     },
+     "role": "JDK 17 instead of RSS"
+    },
+    {
+     "event": "jdk.GCHeapMemoryUsage",
+     "field": "committed",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "1 s"
+      },
+      "medium": {
+       "period": "1 s"
+      },
+      "low": {
+       "period": "1 s"
+      }
+     }
+    },
+    {
+     "event": "jdk.MetaspaceSummary",
+     "field": "metaspace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    },
+    {
+     "event": "jdk.CodeCacheStatistics",
+     "field": "unallocatedCapacity",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "5 s"
+      },
+      "medium": {
+       "period": "10 s"
+      },
+      "low": {
+       "period": "30 s"
+      }
+     }
+    }
+   ],
+   "derivation": "\u00d1 \u2248 RSS (21/25) or pod memoryUsage (17) \u2212 heap committed \u2212 metaspace committed \u2212 code cache used; shown when NMT is off",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "memory-limits"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.direct.used.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": "MaxDirectMemorySize",
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.DirectBufferStatistics",
+    "field": "memoryUsed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "D = memoryUsed; limit from maxCapacity / -XX:MaxDirectMemorySize",
+   "flags": [],
+   "note": "Netty Unsafe allocations are not counted",
+   "charts": [
+    "nmt"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.direct.capacity.bytes",
+   "group": "nmt",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.DirectBufferStatistics",
+    "field": "totalCapacity",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "nmt"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "nmt.direct.buffers.count",
+   "group": "nmt",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.DirectBufferStatistics",
+    "field": "count",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "nmt"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "container.usage.bytes",
+   "group": "container",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": "container.limit.bytes",
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerMemoryUsage",
+    "field": "memoryUsage",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "memory-limits"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "container.limit.bytes",
+   "group": "container",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerConfiguration",
+    "field": "memoryLimit",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "beginChunk"
+     },
+     "medium": {
+      "period": "beginChunk"
+     },
+     "low": {
+      "period": "beginChunk"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "nmt",
+    "memory-limits"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "container.usage.pct_limit",
+   "group": "container",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerMemoryUsage",
+    "field": "memoryUsage",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ContainerConfiguration",
+     "field": "memoryLimit",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "beginChunk"
+      },
+      "medium": {
+       "period": "beginChunk"
+      },
+      "low": {
+       "period": "beginChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "q = 100\u00b7memoryUsage/memoryLimit",
+   "flags": [],
+   "charts": [
+    "memory-limits"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "container.rss.bytes",
+   "group": "container",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ResidentSetSize",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "note": "JDK 17: no RSS; use container.usage.bytes (labelled pod memory)",
+   "charts": [
+    "memory-limits"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "container.swap.bytes",
+   "group": "container",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerMemoryUsage",
+    "field": "swapMemoryUsage",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "memory-limits"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "container.mem_fail.count",
+   "group": "container",
+   "unit": "count",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerMemoryUsage",
+    "field": "memoryFailCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "\u0394memoryFailCount per window",
+   "flags": [],
+   "charts": [
+    "memory-limits"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "threads.live.count",
+   "group": "threads",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaThreadStatistics",
+    "field": "activeCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "T = activeCount",
+   "flags": [],
+   "charts": [
+    "threads"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "threads.daemon.count",
+   "group": "threads",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaThreadStatistics",
+    "field": "daemonCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "threads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "threads.peak.count",
+   "group": "threads",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaThreadStatistics",
+    "field": "peakCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "threads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "threads.started.per_s",
+   "group": "threads",
+   "unit": "per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaThreadStatistics",
+    "field": "accumulatedCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "r = \u0394accumulatedCount/\u0394t (exact)",
+   "flags": [],
+   "charts": [
+    "threads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "threads.created.count",
+   "group": "threads",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [
+    "creator",
+    "site"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ThreadStart",
+    "field": "parentThread",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ThreadStart",
+     "field": "stackTrace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ],
+   "derivation": "who creates threads: parentThread / first app frame",
+   "flags": [],
+   "charts": [
+    "threads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "threads.state.samples",
+   "group": "threads",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [
+    "state",
+    "pool",
+    "thread"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "profiler.WallClockSample",
+    "field": "state",
+    "producer": "async-profiler",
+    "period_or_threshold": {
+     "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "profiler.WallClockSample",
+     "field": "samples",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "derivation": "\u03a3 samples per thread state",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "threads",
+    "wall-flame"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "locks.wait.ms_per_s",
+   "group": "locks",
+   "unit": "ms_per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [
+    "monitor",
+    "thread"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaMonitorEnter",
+    "field": "duration",
+    "producer": "async-profiler",
+    "period_or_threshold": {
+     "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ThreadPark",
+     "field": "duration",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.JavaMonitorEnter",
+     "field": "monitorClass",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.ThreadPark",
+     "field": "parkedClass",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "derivation": "W \u2248 \u03a3_i max(d_i, I)/\u0394t, d_i = sample weight (wait ns), I = AP lock interval (shared-bucket correction, draft)",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "locks",
+    "lock-flame"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "locks.wait.count",
+   "group": "locks",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [
+    "monitor",
+    "thread"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaMonitorEnter",
+    "field": "duration",
+    "producer": "async-profiler",
+    "period_or_threshold": {
+     "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ThreadPark",
+     "field": "duration",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.JavaMonitorEnter",
+     "field": "monitorClass",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.ThreadPark",
+     "field": "parkedClass",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "derivation": "n \u2248 \u03a3_i max(1, I/d_i)",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "locks"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "locks.wait.ms",
+   "group": "locks",
+   "unit": "ms",
+   "kind": "event_duration",
+   "stats": [
+    "max",
+    "avg",
+    "count"
+   ],
+   "by": [
+    "monitor",
+    "thread"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaMonitorEnter",
+    "field": "duration",
+    "producer": "async-profiler",
+    "period_or_threshold": {
+     "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ThreadPark",
+     "field": "duration",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.JavaMonitorEnter",
+     "field": "monitorClass",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.ThreadPark",
+     "field": "parkedClass",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "derivation": "durations of sampled waits only (max = longest sampled wait); no histogram",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "locks"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "vt.pinned.us",
+   "group": "vt",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "site",
+    "carrier",
+    "reason"
+   ],
+   "histogram": true,
+   "histogram_family": "vt_pinned",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.VirtualThreadPinned",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "5 ms"
+     },
+     "medium": {
+      "threshold": "20 ms"
+     },
+     "low": {
+      "threshold": "50 ms"
+     }
+    }
+   },
+   "derivation": "site = first app frame; carrier/reason = carrierThread/pinnedReason (JDK 25 only)",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "vthreads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "vt.pinned.per_s",
+   "group": "vt",
+   "unit": "per_s",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "site"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.VirtualThreadPinned",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "5 ms"
+     },
+     "medium": {
+      "threshold": "20 ms"
+     },
+     "low": {
+      "threshold": "50 ms"
+     }
+    }
+   },
+   "derivation": "#VirtualThreadPinned over threshold / \u0394t",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "vthreads"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "vt.pinned.ms_per_s",
+   "group": "vt",
+   "unit": "ms_per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [
+    "site"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.VirtualThreadPinned",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "5 ms"
+     },
+     "medium": {
+      "threshold": "20 ms"
+     },
+     "low": {
+      "threshold": "50 ms"
+     }
+    }
+   },
+   "derivation": "\u03a3 pinned duration / \u0394t (pinned time share)",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "vthreads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "vt.submit_failed.count",
+   "group": "vt",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.VirtualThreadSubmitFailed",
+    "field": "exceptionMessage",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "flags": [],
+   "charts": [
+    "vthreads"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "safepoint.duration.us",
+   "group": "safepoint",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "operation"
+   ],
+   "histogram": true,
+   "histogram_family": "safepoint",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SafepointBegin",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ExecuteVMOperation",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "1 ms"
+      },
+      "low": {
+       "threshold": "10 ms"
+      }
+     },
+     "role": "VM operation time inside the safepoint, joined on safepointId"
+    },
+    {
+     "event": "jdk.ExecuteVMOperation",
+     "field": "operation",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "1 ms"
+      },
+      "low": {
+       "threshold": "10 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "\u2248 SafepointBegin.duration (begin\u2192synchronized+cleanup) + ExecuteVMOperation.duration (same safepointId). SafepointEnd is OFF, so the end phase is not counted",
+   "flags": [],
+   "charts": [
+    "safepoints"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "safepoint.ttsp.us",
+   "group": "safepoint",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [],
+   "histogram": true,
+   "histogram_family": "safepoint",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SafepointStateSynchronization",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "derivation": "time to safepoint",
+   "flags": [],
+   "charts": [
+    "safepoints"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "safepoint.time_pct",
+   "group": "safepoint",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SafepointBegin",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ExecuteVMOperation",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "1 ms"
+      },
+      "low": {
+       "threshold": "10 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "100\u00b7\u03a3 safepoint.duration.us in window / \u0394t",
+   "flags": [],
+   "charts": [
+    "safepoints"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "safepoint.count.per_s",
+   "group": "safepoint",
+   "unit": "per_s",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "operation"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SafepointBegin",
+    "field": "safepointId",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "safepoints"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.compile.us",
+   "group": "jit",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "compiler",
+    "level",
+    "method"
+   ],
+   "histogram": true,
+   "histogram_family": "jit_compile",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.Compilation",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "100 ms"
+     },
+     "medium": {
+      "threshold": "500 ms"
+     },
+     "low": {
+      "threshold": "1000 ms"
+     }
+    }
+   },
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.compiles.per_s",
+   "group": "jit",
+   "unit": "per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilerStatistics",
+    "field": "compileCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394compileCount/\u0394t (exact, endChunk)",
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.compile_time.pct",
+   "group": "jit",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilerStatistics",
+    "field": "totalTimeSpent",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "100\u00b7\u0394totalTimeSpent(ms)/\u0394t(ms)",
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.deopts.per_min",
+   "group": "jit",
+   "unit": "per_min",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "method",
+    "reason",
+    "action"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.Deoptimization",
+    "field": "method",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "60\u00b7#Deoptimization/\u0394t(s)",
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "jit.compile_failed.count",
+   "group": "jit",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilationFailure",
+    "field": "failureMessage",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.bailouts.count",
+   "group": "jit",
+   "unit": "count",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilerStatistics",
+    "field": "bailoutCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394bailoutCount",
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.invalidated.count",
+   "group": "jit",
+   "unit": "count",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilerStatistics",
+    "field": "invalidatedCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394invalidatedCount",
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.queue.size",
+   "group": "jit",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "compiler"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilerQueueUtilization",
+    "field": "queueSize",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "compile queue backlog",
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.queue.added.per_s",
+   "group": "jit",
+   "unit": "per_s",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "compiler"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilerQueueUtilization",
+    "field": "addedRate",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "jit.queue.removed.per_s",
+   "group": "jit",
+   "unit": "per_s",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "compiler"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.CompilerQueueUtilization",
+    "field": "removedRate",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "jit"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "classes.loaded.per_s",
+   "group": "classes",
+   "unit": "per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ClassLoadingStatistics",
+    "field": "loadedClassCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394loadedClassCount/\u0394t (exact, endChunk)",
+   "flags": [],
+   "charts": [
+    "class-loading"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "classes.unloaded.per_s",
+   "group": "classes",
+   "unit": "per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ClassLoadingStatistics",
+    "field": "unloadedClassCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394unloadedClassCount/\u0394t",
+   "flags": [],
+   "charts": [
+    "class-loading"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "classes.net.count",
+   "group": "classes",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": true,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ClassLoadingStatistics",
+    "field": "loadedClassCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.ClassLoadingStatistics",
+     "field": "unloadedClassCount",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "endChunk"
+      },
+      "medium": {
+       "period": "endChunk"
+      },
+      "low": {
+       "period": "endChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "loadedClassCount \u2212 unloadedClassCount",
+   "flags": [],
+   "charts": [
+    "class-loading"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "classes.loader.classes.count",
+   "group": "classes",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "loader"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ClassLoaderStatistics",
+    "field": "classCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "10 s"
+     },
+     "medium": {
+      "period": "30 s"
+     },
+     "low": {
+      "period": "60 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "class-loading"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "classes.loader.hidden.count",
+   "group": "classes",
+   "unit": "count",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "loader"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ClassLoaderStatistics",
+    "field": "hiddenClassCount",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "10 s"
+     },
+     "medium": {
+      "period": "30 s"
+     },
+     "low": {
+      "period": "60 s"
+     }
+    }
+   },
+   "flags": [],
+   "charts": [
+    "class-loading"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "classes.loader.chunk.bytes",
+   "group": "classes",
+   "unit": "bytes",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "loader"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ClassLoaderStatistics",
+    "field": "chunkSize",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "10 s"
+     },
+     "medium": {
+      "period": "30 s"
+     },
+     "low": {
+      "period": "60 s"
+     }
+    }
+   },
+   "derivation": "metaspace chunk bytes per loader",
+   "flags": [],
+   "charts": [
+    "class-loading"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "socket.read.us",
+   "group": "socket",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "peer",
+    "thread"
+   ],
+   "histogram": true,
+   "histogram_family": "socket",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SocketRead",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.SocketRead",
+     "field": "host",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    },
+    {
+     "event": "jdk.SocketRead",
+     "field": "port",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    }
+   ],
+   "derivation": "peer = host:port; also rate-limited (throttle) on JDK 25",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "socket"
+   ],
+   "overview_key": true,
+   "overview_stat": "p99"
+  },
+  {
+   "name": "socket.write.us",
+   "group": "socket",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "peer",
+    "thread"
+   ],
+   "histogram": true,
+   "histogram_family": "socket",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SocketWrite",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.SocketWrite",
+     "field": "host",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    },
+    {
+     "event": "jdk.SocketWrite",
+     "field": "port",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    }
+   ],
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "network"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "socket.read.bytes",
+   "group": "socket",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "avg",
+    "max",
+    "count"
+   ],
+   "by": [
+    "peer"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SocketRead",
+    "field": "bytesRead",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "socket"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "socket.write.bytes",
+   "group": "socket",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "avg",
+    "max",
+    "count"
+   ],
+   "by": [
+    "peer"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SocketWrite",
+    "field": "bytesWritten",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "network"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "socket.read_time.ms_per_s",
+   "group": "socket",
+   "unit": "ms_per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [
+    "peer"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.SocketRead",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "derivation": "\u03a3 slow-read duration / \u0394t (thread-time per second)",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "socket",
+    "socket-flame"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "socket.net.rx.bytes_per_s",
+   "group": "socket",
+   "unit": "bytes_per_s",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "interface"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.NetworkUtilization",
+    "field": "readRate",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "readRate (bits/s) / 8",
+   "flags": [],
+   "charts": [
+    "network"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "socket.net.tx.bytes_per_s",
+   "group": "socket",
+   "unit": "bytes_per_s",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "interface"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.NetworkUtilization",
+    "field": "writeRate",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "1 s"
+     },
+     "medium": {
+      "period": "1 s"
+     },
+     "low": {
+      "period": "1 s"
+     }
+    }
+   },
+   "derivation": "writeRate (bits/s) / 8",
+   "flags": [],
+   "charts": [
+    "network"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "socket.tls.handshakes.per_s",
+   "group": "socket",
+   "unit": "per_s",
+   "kind": "event_count",
+   "stats": [
+    "avg",
+    "max",
+    "count",
+    "rate"
+   ],
+   "by": [
+    "peer",
+    "protocol"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.TLSHandshake",
+    "field": "peerHost",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.TLSHandshake",
+     "field": "peerPort",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    },
+    {
+     "event": "jdk.TLSHandshake",
+     "field": "protocolVersion",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ],
+   "flags": [],
+   "charts": [
+    "network"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "file.io.us",
+   "group": "file",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "op",
+    "path",
+    "thread"
+   ],
+   "histogram": true,
+   "histogram_family": "file_io",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.FileRead",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.FileWrite",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    },
+    {
+     "event": "jdk.FileForce",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms"
+      },
+      "medium": {
+       "threshold": "20 ms"
+      },
+      "low": {
+       "threshold": "50 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.FileRead",
+     "field": "path",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    }
+   ],
+   "derivation": "op = read|write|force; FileRead/FileWrite also rate-limited (300/100/50 per s)",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "file-io"
+   ],
+   "overview_key": true,
+   "overview_stat": "p99"
+  },
+  {
+   "name": "file.io.bytes",
+   "group": "file",
+   "unit": "bytes",
+   "kind": "event_count",
+   "stats": [
+    "sum",
+    "avg",
+    "max",
+    "count"
+   ],
+   "by": [
+    "op",
+    "path"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.FileRead",
+    "field": "bytesRead",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.FileWrite",
+     "field": "bytesWritten",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    }
+   ],
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "file-io"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "file.disk.iops",
+   "group": "file",
+   "unit": "per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerIOUsage",
+    "field": "serviceRequests",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394serviceRequests/\u0394t (container block I/O)",
+   "flags": [],
+   "charts": [
+    "file-io"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "file.disk.bytes_per_s",
+   "group": "file",
+   "unit": "bytes_per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ContainerIOUsage",
+    "field": "dataTransferred",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394dataTransferred/\u0394t",
+   "flags": [],
+   "charts": [
+    "file-io"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "exceptions.thrown.per_s",
+   "group": "exceptions",
+   "unit": "per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.ExceptionStatistics",
+    "field": "throwables",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u03b5 = \u0394throwables/\u0394t (exact, endChunk)",
+   "flags": [],
+   "charts": [
+    "exceptions"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "exceptions.errors.count",
+   "group": "exceptions",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [
+    "class",
+    "site"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "source": {
+    "event": "jdk.JavaErrorThrow",
+    "field": "thrownClass",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "derivation": "Errors only (JavaExceptionThrow is off)",
+   "flags": [],
+   "charts": [
+    "exceptions"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "endpoint.calls.per_s",
+   "group": "endpoint",
+   "unit": "per_s",
+   "kind": "counter_rate",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum"
+   ],
+   "by": [
+    "handler"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.MethodTiming",
+    "field": "invocations",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "derivation": "\u0394invocations/\u0394t per handler method (endChunk)",
+   "flags": [],
+   "charts": [
+    "endpoints-time",
+    "endpoints-overview"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "endpoint.latency.us",
+   "group": "endpoint",
+   "unit": "us",
+   "kind": "gauge",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "handler"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.MethodTiming",
+    "field": "average",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "period": "endChunk"
+     },
+     "medium": {
+      "period": "endChunk"
+     },
+     "low": {
+      "period": "endChunk"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.MethodTiming",
+     "field": "maximum",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "endChunk"
+      },
+      "medium": {
+       "period": "endChunk"
+      },
+      "low": {
+       "period": "endChunk"
+      }
+     }
+    },
+    {
+     "event": "jdk.MethodTiming",
+     "field": "minimum",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "endChunk"
+      },
+      "medium": {
+       "period": "endChunk"
+      },
+      "low": {
+       "period": "endChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "avg = average, max = maximum, min = minimum per handler; no histogram",
+   "flags": [],
+   "charts": [
+    "endpoints-time",
+    "endpoints-overview"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "endpoint.slow.us",
+   "group": "endpoint",
+   "unit": "us",
+   "kind": "event_duration",
+   "stats": [
+    "avg",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "rate",
+    "p50",
+    "p95",
+    "p99"
+   ],
+   "by": [
+    "handler",
+    "thread"
+   ],
+   "histogram": true,
+   "histogram_family": "endpoint_slow",
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.MethodTrace",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "500 ms"
+     },
+     "medium": {
+      "threshold": "500 ms"
+     },
+     "low": {
+      "threshold": "500 ms"
+     }
+    }
+   },
+   "derivation": "one MethodTrace per call over the threshold (default 500 ms, jafra.io/latency-threshold)",
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "slow-calls"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "endpoint.slow.count",
+   "group": "endpoint",
+   "unit": "count",
+   "kind": "event_count",
+   "stats": [
+    "count",
+    "rate",
+    "sum"
+   ],
+   "by": [
+    "handler"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.MethodTrace",
+    "field": "method",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "500 ms"
+     },
+     "medium": {
+      "threshold": "500 ms"
+     },
+     "low": {
+      "threshold": "500 ms"
+     }
+    }
+   },
+   "flags": [
+    "lower_bound"
+   ],
+   "charts": [
+    "endpoints-overview",
+    "slow-calls"
+   ],
+   "overview_key": false
+  },
+  {
+   "name": "endpoint.slow.pct",
+   "group": "endpoint",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "handler"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "jdk.MethodTrace",
+    "field": "method",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "500 ms"
+     },
+     "medium": {
+      "threshold": "500 ms"
+     },
+     "low": {
+      "threshold": "500 ms"
+     }
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.MethodTiming",
+     "field": "invocations",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "period": "endChunk"
+      },
+      "medium": {
+       "period": "endChunk"
+      },
+      "low": {
+       "period": "endChunk"
+      }
+     }
+    }
+   ],
+   "derivation": "100\u00b7#MethodTrace / \u0394invocations in the same window",
+   "flags": [],
+   "note": "Not lower_bound: it is by definition the share of calls over the threshold, and MethodTrace has no rate limit",
+   "charts": [
+    "endpoints-overview"
+   ],
+   "overview_key": true
+  },
+  {
+   "name": "endpoint.slow.wait.pct",
+   "group": "endpoint",
+   "unit": "pct",
+   "kind": "ratio",
+   "stats": [
+    "avg",
+    "min",
+    "max"
+   ],
+   "by": [
+    "handler",
+    "wait_cause"
+   ],
+   "histogram": false,
+   "trend": false,
+   "limit": null,
+   "jdk": [
+    25
+   ],
+   "source": {
+    "event": "profiler.WallClockSample",
+    "field": "state",
+    "producer": "async-profiler",
+    "period_or_threshold": {
+     "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+     "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+    }
+   },
+   "inputs": [
+    {
+     "event": "jdk.MethodTrace",
+     "field": "eventThread",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "500 ms"
+      },
+      "medium": {
+       "threshold": "500 ms"
+      },
+      "low": {
+       "threshold": "500 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.SocketRead",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    },
+    {
+     "event": "jdk.JavaMonitorEnter",
+     "field": "duration",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.GCPhasePause",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ],
+   "derivation": "share of wall samples on the call thread inside each slow-call window, by state and same-thread events (running, socket, lock, GC, \u2026)",
+   "flags": [
+    "estimate"
+   ],
+   "charts": [
+    "slow-breakdown"
+   ],
+   "overview_key": false
+  }
+ ],
+ "events": [
+  {
+   "type": "gc.pause",
+   "group": "gc",
+   "source": {
+    "event": "jdk.GarbageCollection",
+    "field": "longestPause",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "fields": {
+    "collector": "name",
+    "cause": "cause",
+    "duration_us": "longestPause",
+    "sum_of_pauses_us": "sumOfPauses",
+    "heap_before": "GCHeapSummary.heapUsed (Before GC, gcId)",
+    "heap_after": "GCHeapSummary.heapUsed (After GC, gcId)"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "inputs": [
+    {
+     "event": "jdk.GCHeapSummary",
+     "field": "heapUsed",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ]
+  },
+  {
+   "type": "safepoint",
+   "group": "safepoint",
+   "source": {
+    "event": "jdk.SafepointBegin",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms"
+     },
+     "medium": {
+      "threshold": "0 ms"
+     },
+     "low": {
+      "threshold": "0 ms"
+     }
+    }
+   },
+   "fields": {
+    "operation": "ExecuteVMOperation.operation (safepointId)",
+    "duration_us": "SafepointBegin.duration + ExecuteVMOperation.duration",
+    "ttsp_us": "SafepointStateSynchronization.duration (safepointId)",
+    "threads": "totalThreadCount"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "inputs": [
+    {
+     "event": "jdk.ExecuteVMOperation",
+     "field": "operation",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "1 ms"
+      },
+      "low": {
+       "threshold": "10 ms"
+      }
+     }
+    },
+    {
+     "event": "jdk.SafepointStateSynchronization",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "0 ms"
+      },
+      "medium": {
+       "threshold": "0 ms"
+      },
+      "low": {
+       "threshold": "0 ms"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "endpoint.slow",
+   "group": "endpoint",
+   "source": {
+    "event": "jdk.MethodTrace",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "500 ms"
+     },
+     "medium": {
+      "threshold": "500 ms"
+     },
+     "low": {
+      "threshold": "500 ms"
+     }
+    }
+   },
+   "fields": {
+    "handler": "method",
+    "duration_us": "duration",
+    "thread": "eventThread",
+    "running_pct": "profiler.WallClockSample state on same thread in window",
+    "waiting_pct": "same"
+   },
+   "jdk": [
+    25
+   ],
+   "flags": [
+    "lower_bound"
+   ],
+   "inputs": [
+    {
+     "event": "profiler.WallClockSample",
+     "field": "state",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "group": "exceptions",
+   "source": {
+    "event": "jdk.JavaErrorThrow",
+    "field": "thrownClass",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "class": "thrownClass",
+    "message": "message",
+    "top_frame": "stackTrace"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": []
+  },
+  {
+   "type": "vt.pinned",
+   "group": "vt",
+   "source": {
+    "event": "jdk.VirtualThreadPinned",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "5 ms"
+     },
+     "medium": {
+      "threshold": "20 ms"
+     },
+     "low": {
+      "threshold": "50 ms"
+     }
+    }
+   },
+   "fields": {
+    "duration_us": "duration",
+    "thread": "eventThread",
+    "top_frame": "stackTrace",
+    "carrier": "carrierThread (25)",
+    "reason": "pinnedReason (25)",
+    "blocking_op": "blockingOperation (25)"
+   },
+   "jdk": [
+    21,
+    25
+   ],
+   "flags": [
+    "lower_bound"
+   ]
+  },
+  {
+   "type": "vt.submit_failed",
+   "group": "vt",
+   "source": {
+    "event": "jdk.VirtualThreadSubmitFailed",
+    "field": "exceptionMessage",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "thread_id": "javaThreadId",
+    "message": "exceptionMessage",
+    "top_frame": "stackTrace"
+   },
+   "jdk": [
+    21,
+    25
+   ],
+   "flags": []
+  },
+  {
+   "type": "tls.handshake",
+   "group": "socket",
+   "source": {
+    "event": "jdk.TLSHandshake",
+    "field": "peerHost",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "peer_host": "peerHost",
+    "peer_port": "peerPort",
+    "protocol": "protocolVersion",
+    "cipher": "cipherSuite",
+    "top_frame": "stackTrace"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "note": "No duration field on JDK 25 (instant event); 17/21 have duration"
+  },
+  {
+   "type": "socket.slow",
+   "group": "socket",
+   "source": {
+    "event": "jdk.SocketRead",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "fields": {
+    "op": "read|write (SocketRead/SocketWrite)",
+    "duration_us": "duration",
+    "host": "host",
+    "port": "port",
+    "bytes": "bytesRead|bytesWritten",
+    "top_frame": "stackTrace"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [
+    "lower_bound"
+   ],
+   "inputs": [
+    {
+     "event": "jdk.SocketWrite",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "file.slow",
+   "group": "file",
+   "source": {
+    "event": "jdk.FileRead",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "10 ms",
+      "throttle": "300/s"
+     },
+     "medium": {
+      "threshold": "20 ms",
+      "throttle": "100/s"
+     },
+     "low": {
+      "threshold": "50 ms",
+      "throttle": "50/s"
+     }
+    }
+   },
+   "fields": {
+    "op": "read|write|force",
+    "duration_us": "duration",
+    "path": "path",
+    "bytes": "bytesRead|bytesWritten",
+    "top_frame": "stackTrace"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [
+    "lower_bound"
+   ],
+   "inputs": [
+    {
+     "event": "jdk.FileWrite",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    },
+    {
+     "event": "jdk.FileForce",
+     "field": "duration",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms"
+      },
+      "medium": {
+       "threshold": "20 ms"
+      },
+      "low": {
+       "threshold": "50 ms"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "jit.compile",
+   "group": "jit",
+   "source": {
+    "event": "jdk.Compilation",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "100 ms"
+     },
+     "medium": {
+      "threshold": "500 ms"
+     },
+     "low": {
+      "threshold": "1000 ms"
+     }
+    }
+   },
+   "fields": {
+    "method": "method",
+    "compiler": "compiler",
+    "level": "compileLevel",
+    "duration_us": "duration",
+    "succeeded": "succeded",
+    "osr": "isOsr",
+    "code_size": "codeSize"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [
+    "lower_bound"
+   ]
+  },
+  {
+   "type": "jit.deopt",
+   "group": "jit",
+   "source": {
+    "event": "jdk.Deoptimization",
+    "field": "method",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "method": "method",
+    "reason": "reason",
+    "action": "action",
+    "line": "lineNumber",
+    "bci": "bci"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "note": "stackTrace=false in all JFCs"
+  },
+  {
+   "type": "jit.compile_failed",
+   "group": "jit",
+   "source": {
+    "event": "jdk.CompilationFailure",
+    "field": "failureMessage",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "compile_id": "compileId",
+    "message": "failureMessage"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": []
+  },
+  {
+   "type": "codecache.full",
+   "group": "codecache",
+   "source": {
+    "event": "jdk.CodeCacheFull",
+    "field": "codeBlobType",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "code_heap": "codeBlobType",
+    "full_count": "fullCount",
+    "unallocated": "unallocatedCapacity"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": []
+  },
+  {
+   "type": "metaspace.threshold",
+   "group": "metaspace",
+   "source": {
+    "event": "jdk.MetaspaceGCThreshold",
+    "field": "newValue",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "old": "oldValue",
+    "new": "newValue",
+    "updater": "updater"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": []
+  },
+  {
+   "type": "metaspace.alloc_failure",
+   "group": "metaspace",
+   "source": {
+    "event": "jdk.MetaspaceAllocationFailure",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "loader": "classLoader",
+    "size": "size",
+    "type": "metadataType",
+    "top_frame": "stackTrace"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": []
+  },
+  {
+   "type": "oom",
+   "group": "exceptions",
+   "source": {
+    "event": "jdk.MetaspaceOOM",
+    "field": "size",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "kind": "metaspace (MetaspaceOOM) | heap/other (JavaErrorThrow thrownClass=java.lang.OutOfMemoryError)",
+    "loader": "classLoader",
+    "size": "size",
+    "message": "JavaErrorThrow.message",
+    "top_frame": "stackTrace"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "inputs": [
+    {
+     "event": "jdk.JavaErrorThrow",
+     "field": "thrownClass",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": "on (no period/threshold)",
+      "medium": "on (no period/threshold)",
+      "low": "on (no period/threshold)"
+     }
+    }
+   ]
+  },
+  {
+   "type": "gc.evac_failed",
+   "group": "gc",
+   "source": {
+    "event": "jdk.EvacuationFailed",
+    "field": "evacuationFailed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "gc_id": "gcId",
+    "object_count": "evacuationFailed.objectCount",
+    "first_size_bytes": "evacuationFailed.firstSize",
+    "smallest_size_bytes": "evacuationFailed.smallestSize",
+    "total_size_bytes": "evacuationFailed.totalSize"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "note": "Emitted by G1 evacuation failure only; join gc.pause on gc_id for collector and pause."
+  },
+  {
+   "type": "gc.promotion_failed",
+   "group": "gc",
+   "source": {
+    "event": "jdk.PromotionFailed",
+    "field": "promotionFailed",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": "on (no period/threshold)",
+     "medium": "on (no period/threshold)",
+     "low": "on (no period/threshold)"
+    }
+   },
+   "fields": {
+    "gc_id": "gcId",
+    "object_count": "promotionFailed.objectCount",
+    "first_size_bytes": "promotionFailed.firstSize",
+    "smallest_size_bytes": "promotionFailed.smallestSize",
+    "total_size_bytes": "promotionFailed.totalSize",
+    "thread": "thread"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "note": "Generational stop-the-world collectors only; join gc.pause on gc_id."
+  },
+  {
+   "type": "gc.system_gc",
+   "group": "gc",
+   "source": {
+    "event": "jdk.SystemGC",
+    "field": "duration",
+    "producer": "jdk",
+    "period_or_threshold": {
+     "aggressive": {
+      "threshold": "0 ms",
+      "stackTrace": true
+     },
+     "medium": {
+      "threshold": "0 ms",
+      "stackTrace": true
+     },
+     "low": {
+      "threshold": "0 ms",
+      "stackTrace": true
+     }
+    }
+   },
+   "fields": {
+    "duration_us": "duration",
+    "thread": "eventThread",
+    "top_frame": "stackTrace (first app frame)",
+    "invoked_concurrent": "invokedConcurrent"
+   },
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "flags": [],
+   "note": "Has a stack, so it answers who called System.gc()."
+  }
+ ],
+ "frame_kinds": [
+  {
+   "kind": "cpu",
+   "source": [
+    {
+     "event": "jdk.ExecutionSample",
+     "field": "stackTrace",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "unit": "samples",
+   "flags": [
+    "estimate"
+   ],
+   "filters": [
+    "thread",
+    "endpoint (25)"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "kind": "alloc",
+   "source": [
+    {
+     "event": "jdk.ObjectAllocationInNewTLAB",
+     "field": "stackTrace",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.ObjectAllocationOutsideTLAB",
+     "field": "stackTrace",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "unit": "bytes",
+   "flags": [
+    "estimate"
+   ],
+   "filters": [
+    "thread"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "kind": "lock",
+   "source": [
+    {
+     "event": "jdk.JavaMonitorEnter",
+     "field": "stackTrace",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    },
+    {
+     "event": "jdk.ThreadPark",
+     "field": "stackTrace",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "unit": "estimated wait ms",
+   "flags": [
+    "estimate"
+   ],
+   "filters": [
+    "thread"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "kind": "wall",
+   "source": [
+    {
+     "event": "profiler.WallClockSample",
+     "field": "stackTrace",
+     "producer": "async-profiler",
+     "period_or_threshold": {
+      "aggressive": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "medium": "async-profiler (JFC sets enabled=false; AP writes it)",
+      "low": "async-profiler (JFC sets enabled=false; AP writes it)"
+     }
+    }
+   ],
+   "unit": "samples",
+   "flags": [
+    "estimate"
+   ],
+   "filters": [
+    "thread",
+    "state (running|waiting)",
+    "endpoint (25)"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "kind": "socket",
+   "source": [
+    {
+     "event": "jdk.SocketRead",
+     "field": "stackTrace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    },
+    {
+     "event": "jdk.SocketWrite",
+     "field": "stackTrace",
+     "producer": "jdk",
+     "period_or_threshold": {
+      "aggressive": {
+       "threshold": "10 ms",
+       "throttle": "300/s"
+      },
+      "medium": {
+       "threshold": "20 ms",
+       "throttle": "100/s"
+      },
+      "low": {
+       "threshold": "50 ms",
+       "throttle": "50/s"
+      }
+     }
+    }
+   ],
+   "unit": "samples (slow ops over threshold)",
+   "flags": [
+    "lower_bound"
+   ],
+   "filters": [
+    "thread"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  }
+ ],
+ "charts": [
+  {
+   "id": "cpu-limit",
+   "group": "cpu",
+   "title": "CPU used vs the limit",
+   "views": [
+    {
+     "id": "used",
+     "title": "Used vs limit"
+    },
+    {
+     "id": "throttle",
+     "title": "Throttling"
+    }
+   ],
+   "metrics": [
+    "cpu.used.cores",
+    "cpu.user.cores",
+    "cpu.system.cores",
+    "cpu.limit.cores",
+    "cpu.container.pct_limit",
+    "cpu.throttled.pct",
+    "cpu.throttled.s_per_s",
+    "cpu.jvm_user.pct",
+    "cpu.jvm_system.pct",
+    "cpu.machine.pct"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "Theil\u2013Sen trend + time to limit"
+  },
+  {
+   "id": "cpu-threads",
+   "group": "cpu",
+   "title": "CPU by thread",
+   "views": [
+    {
+     "id": "heat",
+     "title": "Heat map"
+    }
+   ],
+   "metrics": [
+    "cpu.thread.pct"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "ThreadCPULoad is 1 s on aggressive, endChunk on medium/low"
+  },
+  {
+   "id": "cpu-flame",
+   "group": "cpu",
+   "title": "CPU flame graph",
+   "views": [
+    {
+     "id": "flame",
+     "title": "Flame"
+    }
+   ],
+   "metrics": [
+    "cpu.samples.count"
+   ],
+   "events": [],
+   "frames": [
+    "cpu"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "heap-spaces",
+   "group": "heap",
+   "title": "Heap spaces over time",
+   "views": [
+    {
+     "id": "used",
+     "title": "Used vs committed"
+    },
+    {
+     "id": "gc",
+     "title": "Before / after GC"
+    },
+    {
+     "id": "ages",
+     "title": "Survivors by age"
+    }
+   ],
+   "metrics": [
+    "heap.pool.used.bytes",
+    "heap.pool.committed.bytes",
+    "heap.space.used.bytes",
+    "heap.survivor_age.bytes",
+    "heap.promotion.bytes_per_s"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "Pool layer 21+; per-space split depends on collector"
+  },
+  {
+   "id": "heap-used",
+   "group": "heap",
+   "title": "Heap used vs max",
+   "views": [
+    {
+     "id": "used",
+     "title": "Used vs max"
+    }
+   ],
+   "metrics": [
+    "heap.used.bytes",
+    "heap.committed.bytes",
+    "heap.max.bytes",
+    "heap.used.pct_max"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "Theil\u2013Sen trend + time to limit"
+  },
+  {
+   "id": "heap-live",
+   "group": "heap",
+   "title": "Live after full GC",
+   "views": [
+    {
+     "id": "live",
+     "title": "After-GC heap"
+    }
+   ],
+   "metrics": [
+    "heap.after_gc.bytes",
+    "heap.before_gc.bytes",
+    "heap.occupancy.pct",
+    "heap.max.bytes"
+   ],
+   "events": [
+    "gc.pause"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "alloc-classes",
+   "group": "alloc",
+   "title": "What fills the heap: top classes",
+   "views": [
+    {
+     "id": "top",
+     "title": "Top classes"
+    },
+    {
+     "id": "time",
+     "title": "Over time"
+    }
+   ],
+   "metrics": [
+    "alloc.sampled.bytes",
+    "alloc.rate.bytes_per_s"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "alloc-sites",
+   "group": "alloc",
+   "title": "What fills the heap: allocation paths",
+   "views": [
+    {
+     "id": "paths",
+     "title": "Allocation paths"
+    },
+    {
+     "id": "gc",
+     "title": "Allocations that triggered a GC"
+    }
+   ],
+   "metrics": [
+    "alloc.sampled.bytes",
+    "alloc.gc_trigger.count"
+   ],
+   "events": [],
+   "frames": [
+    "alloc"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "alloc-flame",
+   "group": "alloc",
+   "title": "Allocation flame graph",
+   "views": [
+    {
+     "id": "flame",
+     "title": "Flame"
+    }
+   ],
+   "metrics": [
+    "alloc.sampled.bytes"
+   ],
+   "events": [],
+   "frames": [
+    "alloc"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "gc-freed",
+   "group": "gc",
+   "title": "Memory freed by GC",
+   "views": [
+    {
+     "id": "freed",
+     "title": "Freed per GC"
+    },
+    {
+     "id": "copied",
+     "title": "Copied per GC (G1)"
+    },
+    {
+     "id": "shen",
+     "title": "Shenandoah evacuation",
+     "jdk": [
+      25
+     ]
+    }
+   ],
+   "metrics": [
+    "gc.freed.bytes",
+    "gc.copied.bytes",
+    "gc.shenandoah.collected.bytes"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "gc-pauses",
+   "group": "gc",
+   "title": "GC pauses",
+   "views": [
+    {
+     "id": "time",
+     "title": "Over time"
+    },
+    {
+     "id": "hist",
+     "title": "Histogram"
+    }
+   ],
+   "metrics": [
+    "gc.pause.us",
+    "gc.pause.time_pct",
+    "gc.count.per_s",
+    "gc.full.count",
+    "gc.cpu.pct"
+   ],
+   "events": [
+    "gc.pause"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "gc-phases",
+   "group": "gc",
+   "title": "Where GC time goes",
+   "views": [
+    {
+     "id": "phases",
+     "title": "Phases"
+    },
+    {
+     "id": "refs",
+     "title": "References processed"
+    }
+   ],
+   "metrics": [
+    "gc.phase.us",
+    "gc.references.count"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "compaction",
+   "group": "gc",
+   "title": "Old gen compaction (full GCs)",
+   "views": [
+    {
+     "id": "old",
+     "title": "Old gen before / after"
+    }
+   ],
+   "metrics": [
+    "heap.space.used.bytes",
+    "gc.full.count"
+   ],
+   "events": [
+    "gc.pause"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "Parallel GC only (ParallelOldGarbageCollection + PSHeapSummary)"
+  },
+  {
+   "id": "zgc-reloc",
+   "group": "gc",
+   "title": "Relocation over time",
+   "views": [
+    {
+     "id": "bytes",
+     "title": "Relocation set"
+    }
+   ],
+   "metrics": [
+    "gc.zgc.reloc_set.bytes"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "ZGC only"
+  },
+  {
+   "id": "zgc-pages",
+   "group": "gc",
+   "title": "Relocation by page type",
+   "views": [
+    {
+     "id": "mb",
+     "title": "Memory"
+    },
+    {
+     "id": "pages",
+     "title": "Pages"
+    }
+   ],
+   "metrics": [
+    "gc.zgc.reloc_group.bytes",
+    "gc.zgc.reloc_group.pages"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "ZGC only"
+  },
+  {
+   "id": "zgc-alloc",
+   "group": "gc",
+   "title": "Page allocations and uncommit",
+   "views": [
+    {
+     "id": "alloc",
+     "title": "Page allocations"
+    },
+    {
+     "id": "uncommit",
+     "title": "Uncommit / unmap"
+    },
+    {
+     "id": "stall",
+     "title": "Allocation stalls"
+    }
+   ],
+   "metrics": [
+    "gc.zgc.page_alloc.bytes",
+    "gc.zgc.uncommit.bytes",
+    "gc.zgc.unmap.bytes",
+    "gc.zgc.stall.us"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "ZGC only; ZUnmap does not exist on JDK 25"
+  },
+  {
+   "id": "metaspace",
+   "group": "metaspace",
+   "title": "Metaspace",
+   "views": [
+    {
+     "id": "used",
+     "title": "Used and committed vs MaxMetaspaceSize"
+    }
+   ],
+   "metrics": [
+    "metaspace.used.bytes",
+    "metaspace.committed.bytes",
+    "metaspace.class_space.used.bytes",
+    "metaspace.gc_threshold.bytes"
+   ],
+   "events": [
+    "metaspace.threshold",
+    "metaspace.alloc_failure",
+    "oom"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "Trend only when MaxMetaspaceSize is set"
+  },
+  {
+   "id": "class-loading",
+   "group": "classes",
+   "title": "Class loading",
+   "views": [
+    {
+     "id": "time",
+     "title": "Loaded / unloaded over time"
+    },
+    {
+     "id": "loaders",
+     "title": "By class loader"
+    }
+   ],
+   "metrics": [
+    "classes.loaded.per_s",
+    "classes.unloaded.per_s",
+    "classes.net.count",
+    "classes.loader.classes.count",
+    "classes.loader.hidden.count",
+    "classes.loader.chunk.bytes"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "code-cache",
+   "group": "codecache",
+   "title": "Code cache",
+   "views": [
+    {
+     "id": "total",
+     "title": "Total"
+    },
+    {
+     "id": "heaps",
+     "title": "By code heap"
+    }
+   ],
+   "metrics": [
+    "codecache.used.bytes",
+    "codecache.reserved.bytes",
+    "codecache.used.pct_reserved",
+    "codecache.methods.count",
+    "codecache.full.count"
+   ],
+   "events": [
+    "codecache.full"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "Theil\u2013Sen trend + time to limit"
+  },
+  {
+   "id": "nmt",
+   "group": "nmt",
+   "title": "Native memory",
+   "views": [
+    {
+     "id": "cat",
+     "title": "By category",
+     "jdk": [
+      21,
+      25
+     ]
+    },
+    {
+     "id": "total",
+     "title": "Total vs pod limit",
+     "jdk": [
+      21,
+      25
+     ]
+    },
+    {
+     "id": "direct",
+     "title": "Direct buffers"
+    }
+   ],
+   "metrics": [
+    "nmt.category.committed.bytes",
+    "nmt.category.reserved.bytes",
+    "nmt.committed.bytes",
+    "nmt.reserved.bytes",
+    "nmt.untracked.bytes",
+    "nmt.direct.used.bytes",
+    "nmt.direct.capacity.bytes",
+    "nmt.direct.buffers.count",
+    "container.limit.bytes"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "NMT views need jafra.io/jdk-nmt: \"enabled\" and JDK 21+; Theil\u2013Sen on total vs pod limit"
+  },
+  {
+   "id": "memory-limits",
+   "group": "container",
+   "title": "Memory vs the pod limit",
+   "views": [
+    {
+     "id": "limit",
+     "title": "Memory vs limit"
+    }
+   ],
+   "metrics": [
+    "container.usage.bytes",
+    "container.limit.bytes",
+    "container.usage.pct_limit",
+    "container.rss.bytes",
+    "container.swap.bytes",
+    "container.mem_fail.count",
+    "heap.committed.bytes",
+    "nmt.committed.bytes",
+    "nmt.estimate.bytes"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ],
+   "note": "17: no RSS line; NMT off: estimate line, labelled; Theil\u2013Sen trend"
+  },
+  {
+   "id": "threads",
+   "group": "threads",
+   "title": "Threads over time",
+   "views": [
+    {
+     "id": "count",
+     "title": "Counts"
+    },
+    {
+     "id": "state",
+     "title": "States (wall-clock samples)"
+    }
+   ],
+   "metrics": [
+    "threads.live.count",
+    "threads.daemon.count",
+    "threads.peak.count",
+    "threads.started.per_s",
+    "threads.created.count",
+    "threads.state.samples"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "wall-flame",
+   "group": "threads",
+   "title": "Wall-clock flame graph",
+   "views": [
+    {
+     "id": "flame",
+     "title": "Flame"
+    }
+   ],
+   "metrics": [
+    "threads.state.samples"
+   ],
+   "events": [],
+   "frames": [
+    "wall"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "locks",
+   "group": "locks",
+   "title": "Lock contention by monitor class",
+   "views": [
+    {
+     "id": "total",
+     "title": "Total wait"
+    },
+    {
+     "id": "count",
+     "title": "Count"
+    },
+    {
+     "id": "max",
+     "title": "Longest"
+    },
+    {
+     "id": "time",
+     "title": "Over time"
+    }
+   ],
+   "metrics": [
+    "locks.wait.ms_per_s",
+    "locks.wait.count",
+    "locks.wait.ms"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "lock-flame",
+   "group": "locks",
+   "title": "Lock wait flame graph",
+   "views": [
+    {
+     "id": "flame",
+     "title": "Flame"
+    }
+   ],
+   "metrics": [
+    "locks.wait.ms_per_s"
+   ],
+   "events": [],
+   "frames": [
+    "lock"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "vthreads",
+   "group": "vt",
+   "title": "Virtual thread pinning",
+   "views": [
+    {
+     "id": "time",
+     "title": "Over time"
+    },
+    {
+     "id": "sites",
+     "title": "By code site"
+    }
+   ],
+   "metrics": [
+    "vt.pinned.us",
+    "vt.pinned.per_s",
+    "vt.pinned.ms_per_s",
+    "vt.submit_failed.count"
+   ],
+   "events": [
+    "vt.pinned",
+    "vt.submit_failed"
+   ],
+   "frames": [],
+   "jdk": [
+    21,
+    25
+   ]
+  },
+  {
+   "id": "safepoints",
+   "group": "safepoint",
+   "title": "Safepoints",
+   "views": [
+    {
+     "id": "time",
+     "title": "Over time"
+    },
+    {
+     "id": "ops",
+     "title": "By operation"
+    }
+   ],
+   "metrics": [
+    "safepoint.duration.us",
+    "safepoint.ttsp.us",
+    "safepoint.time_pct",
+    "safepoint.count.per_s"
+   ],
+   "events": [
+    "safepoint"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "jit",
+   "group": "jit",
+   "title": "JIT compilations and deopts",
+   "views": [
+    {
+     "id": "time",
+     "title": "Over time"
+    },
+    {
+     "id": "comp",
+     "title": "Compilations"
+    },
+    {
+     "id": "reasons",
+     "title": "Deopt reasons"
+    },
+    {
+     "id": "queue",
+     "title": "Compile queue backlog",
+     "jdk": [
+      25
+     ]
+    }
+   ],
+   "metrics": [
+    "jit.compile.us",
+    "jit.compiles.per_s",
+    "jit.compile_time.pct",
+    "jit.deopts.per_min",
+    "jit.compile_failed.count",
+    "jit.bailouts.count",
+    "jit.invalidated.count",
+    "jit.queue.size",
+    "jit.queue.added.per_s",
+    "jit.queue.removed.per_s"
+   ],
+   "events": [
+    "jit.compile",
+    "jit.deopt",
+    "jit.compile_failed"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "socket",
+   "group": "socket",
+   "title": "Socket read latency",
+   "views": [
+    {
+     "id": "hist",
+     "title": "By peer"
+    },
+    {
+     "id": "time",
+     "title": "Over time"
+    }
+   ],
+   "metrics": [
+    "socket.read.us",
+    "socket.read.bytes",
+    "socket.read_time.ms_per_s"
+   ],
+   "events": [
+    "socket.slow"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "network",
+   "group": "socket",
+   "title": "Network",
+   "views": [
+    {
+     "id": "throughput",
+     "title": "Throughput per interface"
+    },
+    {
+     "id": "tls",
+     "title": "TLS handshakes over time"
+    },
+    {
+     "id": "writes",
+     "title": "Slow writes"
+    }
+   ],
+   "metrics": [
+    "socket.net.rx.bytes_per_s",
+    "socket.net.tx.bytes_per_s",
+    "socket.tls.handshakes.per_s",
+    "socket.write.us",
+    "socket.write.bytes"
+   ],
+   "events": [
+    "tls.handshake",
+    "socket.slow"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "socket-flame",
+   "group": "socket",
+   "title": "Socket I/O flame graph",
+   "views": [
+    {
+     "id": "flame",
+     "title": "Flame"
+    }
+   ],
+   "metrics": [
+    "socket.read_time.ms_per_s"
+   ],
+   "events": [],
+   "frames": [
+    "socket"
+   ],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "file-io",
+   "group": "file",
+   "title": "File I/O",
+   "views": [
+    {
+     "id": "paths",
+     "title": "By file"
+    },
+    {
+     "id": "time",
+     "title": "Over time"
+    },
+    {
+     "id": "disk",
+     "title": "Container disk"
+    }
+   ],
+   "metrics": [
+    "file.io.us",
+    "file.io.bytes",
+    "file.disk.iops",
+    "file.disk.bytes_per_s"
+   ],
+   "events": [
+    "file.slow"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "exceptions",
+   "group": "exceptions",
+   "title": "Exceptions",
+   "views": [
+    {
+     "id": "time",
+     "title": "Exceptions/s over time"
+    },
+    {
+     "id": "errors",
+     "title": "Errors by class"
+    }
+   ],
+   "metrics": [
+    "exceptions.thrown.per_s",
+    "exceptions.errors.count"
+   ],
+   "events": [
+    "error",
+    "oom"
+   ],
+   "frames": [],
+   "jdk": [
+    17,
+    21,
+    25
+   ]
+  },
+  {
+   "id": "endpoints-time",
+   "group": "endpoint",
+   "title": "Traffic and latency per endpoint",
+   "views": [
+    {
+     "id": "rate",
+     "title": "Rate"
+    },
+    {
+     "id": "avg",
+     "title": "Average"
+    },
+    {
+     "id": "max",
+     "title": "Max"
+    }
+   ],
+   "metrics": [
+    "endpoint.calls.per_s",
+    "endpoint.latency.us"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    25
+   ]
+  },
+  {
+   "id": "endpoints-overview",
+   "group": "endpoint",
+   "title": "Endpoints overview",
+   "views": [
+    {
+     "id": "table",
+     "title": "Calls, avg, max, slow count and %"
+    }
+   ],
+   "metrics": [
+    "endpoint.calls.per_s",
+    "endpoint.latency.us",
+    "endpoint.slow.count",
+    "endpoint.slow.pct"
+   ],
+   "events": [],
+   "frames": [],
+   "jdk": [
+    25
+   ]
+  },
+  {
+   "id": "slow-calls",
+   "group": "endpoint",
+   "title": "Slow calls",
+   "views": [
+    {
+     "id": "scatter",
+     "title": "One dot per call over the threshold"
+    }
+   ],
+   "metrics": [
+    "endpoint.slow.us",
+    "endpoint.slow.count"
+   ],
+   "events": [
+    "endpoint.slow"
+   ],
+   "frames": [],
+   "jdk": [
+    25
+   ]
+  },
+  {
+   "id": "slow-breakdown",
+   "group": "endpoint",
+   "title": "Slow-call breakdown by wait cause",
+   "views": [
+    {
+     "id": "cause",
+     "title": "By wait cause"
+    },
+    {
+     "id": "flame",
+     "title": "Call flame graph (wall, slow-call windows)"
+    }
+   ],
+   "metrics": [
+    "endpoint.slow.wait.pct"
+   ],
+   "events": [
+    "endpoint.slow"
+   ],
+   "frames": [
+    "wall",
+    "cpu"
+   ],
+   "jdk": [
+    25
+   ]
+  }
+ ],
+ "unverified": [
+  {
+   "item": "safepoint.duration.us / safepoint event",
+   "why": "SafepointEnd is OFF in all three JFCs. SafepointBegin is committed after synchronize + cleanup, before the VM operation runs (verified in jdk21u safepoint.cpp), so its duration is not the full pause. Catalogue uses SafepointBegin.duration + ExecuteVMOperation.duration joined on safepointId; ExecuteVMOperation has threshold 0/1/10 ms, so on medium/low short operations are missing and the end phase is never counted. Not yet checked on a real recording."
+  },
+  {
+   "item": "alloc.sampled.bytes weight",
+   "why": "Which field async-profiler 4.5 sets as the sample weight in its ObjectAllocationInNewTLAB/OutsideTLAB events (allocationSize vs tlabSize) is not confirmed; the sample file has 24 InNewTLAB and 0 OutsideTLAB events."
+  },
+  {
+   "item": "locks.wait.* correction (W, n)",
+   "why": "Horvitz\u2013Thompson correction for the AP shared-bucket lock sampler is a draft formula (collection doc, \"Verify on kind\"). The sample recording has 0 JavaMonitorEnter/ThreadPark events."
+  },
+  {
+   "item": "oom (heap OutOfMemoryError)",
+   "why": "JavaErrorThrow is emitted from the Error constructor. HotSpot can throw preallocated OutOfMemoryError objects for heap exhaustion, which may not emit JavaErrorThrow. Heap OOM detection from JavaErrorThrow alone is not verified; MetaspaceOOM is a dedicated event."
+  },
+  {
+   "item": "endpoint.calls.per_s / endpoint.latency.us",
+   "why": "Whether jdk.MethodTiming invocations/average/maximum are cumulative since instrumentation or per emission period is not verified on JDK 25. \u0394invocations assumes cumulative; if per-period, avg/max per window are direct."
+  },
+  {
+   "item": "cpu.container.pct_limit name vs source",
+   "why": "Locked name says \"process\"; the data is the container cgroup (ContainerCPUUsage). CPULoad.jvmUser+jvmSystem is per-process but its normalisation inside a CPU-limited container was not verified, so it is not used for the ratio."
+  },
+  {
+   "item": "vt.pinned carrier/reason breakdowns",
+   "why": "carrierThread, pinnedReason and blockingOperation exist on JDK 25 only (21 has duration + stack only), verified from jfr metadata. by=carrier|reason returns not_on_this_jdk on 21."
+  },
+  {
+   "item": "tls.handshake duration",
+   "why": "jdk.TLSHandshake has a duration field on 17/21 but not on 25 (jfr metadata). No duration is exposed in the catalogue."
+  },
+  {
+   "item": "TLSHandshake / ExceptionStatistics / CodeCacheFull default thresholds",
+   "why": "JFC sets no threshold for TLSHandshake; recorded behaviour assumes the event default (all handshakes). Not checked on a recording."
+  },
+  {
+   "item": "GCLocker, ZUnmap on JDK 25",
+   "why": "Both events do not exist in JDK 25 metadata. ZUnmap is used by zgc-alloc (17/21 only); GCLocker is enabled but not mapped to any metric."
+  },
+  {
+   "item": "Enabled events not mapped to a metric",
+   "why": "G1BasicIHOP, G1AdaptiveIHOP, GCLocker, EvacuationFailed, PromotionFailed, SystemGC, HeapDump, ProcessStart, RedefineClasses, RetransformClasses, ReservedStackActivation, NativeLibraryLoad/Unload, PhysicalMemory, SwapSpace, flag-change, configuration and recording-health events. They feed incident evidence, INFO chips, get_jvm_info or Recording health, not query_metric series; no locked chart covers IHOP."
+  },
+  {
+   "item": "heap.used.bytes on JDK 17",
+   "why": "GCHeapMemoryUsage does not exist on 17 (verified); the 17 fallback is per-GC GCHeapSummary points, so the heap trend on 17 has one point per GC, not one per second."
+  },
+  {
+   "item": "metaspace.used.bytes cadence",
+   "why": "MetaspaceSummary is GC-linked (before/after each GC), so the overview key and trend have one point per GC; a JVM with few GCs may return not_enough_data."
+  },
+  {
+   "item": "JAVA_TOOL_OPTIONS in JVMInformation.jvmArguments",
+   "why": "Carried over from get_jvm_info: whether flags from JAVA_TOOL_OPTIONS (MaxMetaspaceSize, MaxDirectMemorySize) appear in jvmArguments is not verified, so limit=MaxMetaspaceSize / MaxDirectMemorySize may read \"not set\" wrongly."
+  },
+  {
+   "item": "gc.evac_failed / gc.promotion_failed / gc.system_gc fields",
+   "why": "Fields checked in jfr metadata for JDK 21 and 25 on the box; JDK 17 relies on the earlier metadata dump. Which collectors emit PromotionFailed not checked on a real recording."
+  }
+ ]
+}
