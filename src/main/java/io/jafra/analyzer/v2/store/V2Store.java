@@ -99,10 +99,11 @@ public class V2Store {
                 data.derive.run();
             }
             data.compact();
-            deletePartial(connection, jvmId, data.fromMs);
+            deletePartial(connection, jvmId, data.fromMs, data.toMs);
             appendRollup(jvmId, data);
             appendHist(jvmId, data);
             appendEvents(jvmId, data);
+            appendInternalEvents(jvmId, data);
             insertStacks(data);
             appendSamples(jvmId, data);
             insertWindow(connection, jvmId, chunkId, data, late);
@@ -333,6 +334,264 @@ public class V2Store {
                     found.add(mapRollup(rows));
                 }
                 return found;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    /**
+     * Last {@code limit} windows before {@code beforeMs}, skipping same-group incident windows.
+     * A window with no rollup row is still returned ({@link BaselineSlot#present()} false).
+     */
+    public List<BaselineSlot> baselineSlots(
+            int jvmId, String metric, String key, String group, long beforeMs, int limit) throws IOException {
+        String sql = """
+                WITH chosen AS (
+                    SELECT w.ts
+                    FROM windows w
+                    WHERE w.jvm_id = ?
+                      AND w.ts < ?
+                      AND NOT EXISTS (
+                        SELECT 1 FROM incident_windows i
+                        WHERE i.jvm_id = w.jvm_id AND i.group_name = ? AND i.ts = w.ts)
+                    ORDER BY w.ts DESC
+                    LIMIT ?)
+                SELECT c.ts, r.min, r.max, r.avg, r.count, r.sum
+                FROM chosen c
+                LEFT JOIN rollup_5s r
+                  ON r.jvm_id = ? AND r.ts = c.ts AND r.metric = ? AND r.by_name = '' AND r.key = ?
+                ORDER BY c.ts
+                """;
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql)) {
+            statement.setInt(1, jvmId);
+            statement.setLong(2, beforeMs);
+            statement.setString(3, group == null ? "" : group);
+            statement.setInt(4, limit);
+            statement.setInt(5, jvmId);
+            statement.setString(6, metric);
+            statement.setString(7, key == null ? "" : key);
+            try (ResultSet rows = statement.executeQuery()) {
+                List<BaselineSlot> found = new ArrayList<>();
+                while (rows.next()) {
+                    long ts = rows.getLong(1);
+                    double min = rows.getDouble(2);
+                    boolean present = !rows.wasNull();
+                    if (!present) {
+                        found.add(new BaselineSlot(ts, false, 0, 0, 0, 0, 0));
+                        continue;
+                    }
+                    double max = rows.getDouble(3);
+                    double avg = rows.getDouble(4);
+                    long count = rows.getLong(5);
+                    double sum = rows.getDouble(6);
+                    found.add(new BaselineSlot(ts, true, min, max, avg, count, sum));
+                }
+                return found;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    public Map<Long, Map<Integer, Long>> readHistAt(int jvmId, String metric, String key, List<Long> timestamps)
+            throws IOException {
+        Map<Long, Map<Integer, Long>> found = new LinkedHashMap<>();
+        if (timestamps == null || timestamps.isEmpty()) {
+            return found;
+        }
+        String sql = "SELECT ts, bucket, count FROM hist WHERE jvm_id = ? AND metric = ? AND key = ? AND ts IN ("
+                + String.join(", ", java.util.Collections.nCopies(timestamps.size(), "?")) + ")";
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql)) {
+            int index = 1;
+            statement.setInt(index++, jvmId);
+            statement.setString(index++, metric);
+            statement.setString(index++, key == null ? "" : key);
+            for (long ts : timestamps) {
+                statement.setLong(index++, ts);
+            }
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    long count = rows.getLong(3);
+                    if (count <= 0) {
+                        continue;
+                    }
+                    found.computeIfAbsent(rows.getLong(1), ignored -> new java.util.TreeMap<>())
+                            .merge(rows.getInt(2), count, Long::sum);
+                }
+                return found;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    public List<RollupRow> readBreakdown(int jvmId, String metric, String byName, long ts) throws IOException {
+        String sql = """
+                SELECT jvm_id, metric, by_name, key, ts, min, max, avg, count, sum
+                FROM rollup_5s
+                WHERE jvm_id = ? AND ts = ? AND metric = ? AND by_name = ?
+                ORDER BY sum DESC
+                """;
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql)) {
+            statement.setInt(1, jvmId);
+            statement.setLong(2, ts);
+            statement.setString(3, metric);
+            statement.setString(4, byName == null ? "" : byName);
+            try (ResultSet rows = statement.executeQuery()) {
+                List<RollupRow> found = new ArrayList<>();
+                while (rows.next()) {
+                    found.add(mapRollup(rows));
+                }
+                return found;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    public RollupRow lastTotalBefore(int jvmId, String metric, long beforeMs) throws IOException {
+        String sql = """
+                SELECT jvm_id, metric, by_name, key, ts, min, max, avg, count, sum
+                FROM rollup_5s
+                WHERE jvm_id = ? AND metric = ? AND by_name = '' AND key = '' AND ts < ?
+                ORDER BY ts DESC
+                LIMIT 1
+                """;
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql)) {
+            statement.setInt(1, jvmId);
+            statement.setString(2, metric);
+            statement.setLong(3, beforeMs);
+            try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) {
+                    return null;
+                }
+                return mapRollup(rows);
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    /** Newest first, including {@code throughMs}. */
+    public List<Long> recentWindowStarts(int jvmId, long throughMs, int limit) throws IOException {
+        String sql = "SELECT ts FROM windows WHERE jvm_id = ? AND ts <= ? ORDER BY ts DESC LIMIT ?";
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql)) {
+            statement.setInt(1, jvmId);
+            statement.setLong(2, throughMs);
+            statement.setInt(3, limit);
+            try (ResultSet rows = statement.executeQuery()) {
+                List<Long> found = new ArrayList<>();
+                while (rows.next()) {
+                    found.add(rows.getLong(1));
+                }
+                return found;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    public List<EventRow> readInternalEvents(int jvmId, String name, long fromMs, long toMs) throws IOException {
+        String sql = """
+                SELECT name, ts, duration_us, thread, fields
+                FROM internal_events
+                WHERE jvm_id = ? AND name = ? AND ts >= ? AND ts < ?
+                ORDER BY ts
+                """;
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql)) {
+            statement.setInt(1, jvmId);
+            statement.setString(2, name);
+            statement.setLong(3, fromMs);
+            statement.setLong(4, toMs);
+            try (ResultSet rows = statement.executeQuery()) {
+                List<EventRow> found = new ArrayList<>();
+                while (rows.next()) {
+                    long duration = rows.getLong(3);
+                    found.add(new EventRow(
+                            rows.getString(1),
+                            rows.getLong(2),
+                            rows.wasNull() ? null : duration,
+                            rows.getString(4),
+                            null,
+                            rows.getString(5)));
+                }
+                return found;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    public List<IncidentRecord> openIncidents() throws IOException {
+        String sql = """
+                SELECT id, jvm_id, type, group_name, level, status, t0, t1, peak_at, score, confidence,
+                       headline, felt, when_json, how_bad, together, who, where_json, todo, sources, flags
+                FROM incidents WHERE status = 'open'
+                """;
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql);
+                ResultSet rows = statement.executeQuery()) {
+            List<IncidentRecord> found = new ArrayList<>();
+            while (rows.next()) {
+                found.add(readIncident(rows));
+            }
+            return found;
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    /** Latest incident_windows.ts for this incident, or -1 when none exist. */
+    public long lastIncidentWindowTs(String id) throws IOException {
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(
+                        "SELECT MAX(ts) FROM incident_windows WHERE incident_id = ?")) {
+            statement.setString(1, id);
+            try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) {
+                    return -1L;
+                }
+                long ts = rows.getLong(1);
+                return rows.wasNull() ? -1L : ts;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    public Long windowEnd(int jvmId, long ts) throws IOException {
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(
+                        "SELECT end_ts FROM windows WHERE jvm_id = ? AND ts = ?")) {
+            statement.setInt(1, jvmId);
+            statement.setLong(2, ts);
+            try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) {
+                    return null;
+                }
+                return rows.getLong(1);
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    public int countWindowsAfter(int jvmId, long ts) throws IOException {
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(
+                        "SELECT COUNT(*) FROM windows WHERE jvm_id = ? AND ts > ?")) {
+            statement.setInt(1, jvmId);
+            statement.setLong(2, ts);
+            try (ResultSet rows = statement.executeQuery()) {
+                rows.next();
+                return rows.getInt(1);
             }
         } catch (SQLException error) {
             throw io(error);
@@ -655,12 +914,18 @@ public class V2Store {
 
     public void addIncidentWindow(String id, int jvmId, String group, long ts) throws IOException {
         synchronized (this) {
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO incident_windows (incident_id, jvm_id, group_name, ts) VALUES (?, ?, ?, ?)")) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO incident_windows (incident_id, jvm_id, group_name, ts)
+                    SELECT ?, ?, ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM incident_windows WHERE incident_id = ? AND ts = ?)
+                    """)) {
                 statement.setString(1, id);
                 statement.setInt(2, jvmId);
                 statement.setString(3, group);
                 statement.setLong(4, ts);
+                statement.setString(5, id);
+                statement.setLong(6, ts);
                 statement.executeUpdate();
             } catch (SQLException error) {
                 throw io(error);
@@ -847,6 +1112,7 @@ public class V2Store {
             deleteTs("rollup_1m", horizonMs);
             deleteTs("hist", horizonMs);
             deleteTs("events", horizonMs);
+            deleteTs("internal_events", horizonMs);
             deleteTs("samples", horizonMs);
             deleteTs("windows", horizonMs);
             deleteTs("incident_windows", horizonMs);
@@ -865,7 +1131,9 @@ public class V2Store {
                         DELETE FROM stacks WHERE stack_id NOT IN (
                             SELECT stack_id FROM samples WHERE stack_id IS NOT NULL
                             UNION
-                            SELECT stack_id FROM events WHERE stack_id IS NOT NULL)
+                            SELECT stack_id FROM events WHERE stack_id IS NOT NULL
+                            UNION
+                            SELECT stack_id FROM internal_events WHERE stack_id IS NOT NULL)
                         """);
             }
             connection.commit();
@@ -1047,6 +1315,40 @@ public class V2Store {
         }
     }
 
+    private void appendInternalEvents(int jvmId, WindowData data) throws SQLException {
+        if (data.internalEvents().isEmpty()) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO internal_events (jvm_id, name, ts, duration_us, thread, stack_id, fields)
+                VALUES (?, ?, ?, ?, ?, ?, ?::JSON)
+                """)) {
+            for (WindowData.StoredEvent event : data.internalEvents()) {
+                statement.setInt(1, jvmId);
+                statement.setString(2, event.type());
+                statement.setLong(3, event.tsMs());
+                if (event.durationUs() == null) {
+                    statement.setNull(4, java.sql.Types.BIGINT);
+                } else {
+                    statement.setLong(4, event.durationUs());
+                }
+                if (event.thread() == null) {
+                    statement.setNull(5, java.sql.Types.VARCHAR);
+                } else {
+                    statement.setString(5, event.thread());
+                }
+                if (event.stackId() == null) {
+                    statement.setNull(6, java.sql.Types.BIGINT);
+                } else {
+                    statement.setLong(6, event.stackId());
+                }
+                statement.setString(7, event.fieldsJson() == null ? "{}" : event.fieldsJson());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
     private void appendEvents(int jvmId, WindowData data) throws SQLException {
         try (DuckDBAppender appender = ((DuckDBConnection) connection).createAppender(
                 DuckDBConnection.DEFAULT_SCHEMA, "events")) {
@@ -1219,14 +1521,21 @@ public class V2Store {
         }
     }
 
-    private static void deletePartial(Connection write, int jvmId, long ts) throws SQLException {
+    private static void deletePartial(Connection write, int jvmId, long fromMs, long toMs) throws SQLException {
         for (String table : List.of("rollup_5s", "hist", "events", "samples")) {
             try (PreparedStatement statement = write.prepareStatement(
                     "DELETE FROM " + table + " WHERE jvm_id = ? AND ts = ?")) {
                 statement.setInt(1, jvmId);
-                statement.setLong(2, ts);
+                statement.setLong(2, fromMs);
                 statement.executeUpdate();
             }
+        }
+        try (PreparedStatement statement = write.prepareStatement(
+                "DELETE FROM internal_events WHERE jvm_id = ? AND ts >= ? AND ts < ?")) {
+            statement.setInt(1, jvmId);
+            statement.setLong(2, fromMs);
+            statement.setLong(3, toMs);
+            statement.executeUpdate();
         }
     }
 
@@ -1313,6 +1622,16 @@ public class V2Store {
                         duration_us BIGINT,
                         thread VARCHAR,
                         top_frame VARCHAR,
+                        stack_id BIGINT,
+                        fields JSON)
+                    """);
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS internal_events (
+                        jvm_id INTEGER,
+                        name VARCHAR,
+                        ts BIGINT,
+                        duration_us BIGINT,
+                        thread VARCHAR,
                         stack_id BIGINT,
                         fields JSON)
                     """);
@@ -1517,6 +1836,8 @@ public class V2Store {
             String todoJson,
             String sourcesJson,
             String flagsJson) {}
+
+    public record BaselineSlot(long ts, boolean present, double min, double max, double avg, long count, double sum) {}
 
     public record CommitResult(boolean wrote, int jvmId, boolean late) {
         public static final CommitResult SKIPPED = new CommitResult(false, -1, false);

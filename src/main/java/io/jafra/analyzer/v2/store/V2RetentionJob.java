@@ -14,7 +14,7 @@ import org.jboss.logging.Logger;
 import io.jafra.analyzer.storage.ChunkStore;
 import io.quarkus.scheduler.Scheduled;
 
-/** Deletes v2 rows older than the same horizon as chunk retention. */
+/** Deletes v2 rows older than the same horizon as chunk retention, including internal_events. */
 @ApplicationScoped
 public class V2RetentionJob {
     private static final Logger LOG = Logger.getLogger(V2RetentionJob.class);

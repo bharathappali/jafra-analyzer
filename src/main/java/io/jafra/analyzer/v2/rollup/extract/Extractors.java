@@ -14,6 +14,7 @@ import io.jafra.analyzer.v2.rollup.LockCorrection;
 import io.jafra.analyzer.v2.rollup.Seen;
 import io.jafra.analyzer.v2.rollup.WallStates;
 import io.jafra.analyzer.v2.rollup.WindowData;
+import io.jafra.analyzer.v2.rollup.extract.internal.InternalExtractors;
 
 /**
  * Per-metric extractors registered by catalogue name. One chunk is already in {@link ChunkFacts}.
@@ -170,6 +171,7 @@ public final class Extractors {
         exceptions(facts, out);
         endpoint(facts, out);
         events(facts, out);
+        InternalExtractors.extract(facts, out);
     }
 
     /** Ratios that need counter rates already applied. */

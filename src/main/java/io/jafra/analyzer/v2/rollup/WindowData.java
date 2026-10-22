@@ -54,6 +54,7 @@ public final class WindowData {
     private final Map<String, Double> histMax = new LinkedHashMap<>();
     private final List<CounterObs> counters = new ArrayList<>();
     private final List<StoredEvent> events = new ArrayList<>();
+    private final List<StoredEvent> internalEvents = new ArrayList<>();
     private final Map<Long, String> stacks = new LinkedHashMap<>();
     private final Map<SampleKey, SampleAccum> samples = new LinkedHashMap<>();
 
@@ -91,6 +92,10 @@ public final class WindowData {
 
     public void event(StoredEvent event) {
         events.add(event);
+    }
+
+    public void internalEvent(StoredEvent event) {
+        internalEvents.add(event);
     }
 
     public void stack(long stackId, String framesJson) {
@@ -141,6 +146,10 @@ public final class WindowData {
 
     public List<StoredEvent> events() {
         return events;
+    }
+
+    public List<StoredEvent> internalEvents() {
+        return internalEvents;
     }
 
     public Map<Long, String> stacks() {

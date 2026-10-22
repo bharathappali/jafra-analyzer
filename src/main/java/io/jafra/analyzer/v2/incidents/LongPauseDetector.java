@@ -2,6 +2,8 @@ package io.jafra.analyzer.v2.incidents;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -49,33 +51,35 @@ public class LongPauseDetector implements Detector {
     }
 
     @Override
-    public List<Integer> jdks() {
-        return List.of(17, 21, 25);
+    public Set<Integer> jdks() {
+        return Set.of(17, 21, 25);
     }
 
     @Override
-    public Verdict evaluate(WindowInput input) {
-        RollupRow pause = input.totals().get("gc.pause.us");
-        if (pause == null || pause.count() == 0) {
-            return Verdict.ok(0, "ms", warningMs, criticalMs);
+    public WindowVerdict evaluate(WindowInput input) {
+        Optional<RollupRow> pause = input.window().total("gc.pause.us");
+        if (pause.isEmpty() || pause.get().count() == 0) {
+            return WindowVerdict.ok(0d, "ms", null, new Band(warningMs, criticalMs), family(), "", Set.of());
         }
-        double valueMs = pause.max() / 1000d;
+        double valueMs = pause.get().max() / 1000d;
         double warning = warningMs;
         Double pauseTarget = pauseTarget(input);
         if (pauseTarget != null && pauseTarget > 0d) {
             warning = Math.max(warning, pauseTarget);
         }
-        if (input.baselineProven() && input.baselineGcCount() >= 50 && input.baselinePauseP99Us() != null) {
-            warning = Math.max(warning, 3d * input.baselinePauseP99Us() / 1000d);
+        Baseline baseline = input.baselines().of("gc.pause.us", "", group(), "max");
+        if (baseline.n() >= 60 && baseline.events() >= 50 && baseline.p99() != null) {
+            warning = Math.max(warning, 3d * baseline.p99() / 1000d);
         }
+        Band band = new Band(warning, criticalMs);
         State state = valueMs >= criticalMs ? State.CRITICAL : valueMs >= warning ? State.WARNING : State.OK;
         if (state == State.OK) {
-            return Verdict.ok(valueMs, "ms", warning, criticalMs);
+            return WindowVerdict.ok(valueMs, "ms", null, band, family(), "", Set.of());
         }
         String cause = "GC";
         String collector = "collector";
-        for (EventRow event : input.events()) {
-            if (!"gc.pause".equals(event.type()) || event.fields() == null) {
+        for (EventRow event : input.events().of("gc.pause")) {
+            if (event.fields() == null) {
                 continue;
             }
             try {
@@ -101,7 +105,22 @@ public class LongPauseDetector implements Detector {
         }
         String felt = "Requests stalled for up to " + Math.round(valueMs) + " ms while the JVM paused for GC.";
         String reason = "warning >= " + warning + " ms (proposal, pending KUSMA); critical >= " + criticalMs + " ms";
-        return new Verdict(state, valueMs, "ms", warning, criticalMs, headline, felt, collector, todo, List.of(), reason);
+        return new WindowVerdict(
+                state,
+                valueMs,
+                "ms",
+                null,
+                band,
+                family(),
+                reason,
+                new Who("site", collector, null, false),
+                List.of(),
+                todo,
+                felt,
+                headline,
+                List.of(),
+                Set.of(),
+                null);
     }
 
     private Double pauseTarget(WindowInput input) {

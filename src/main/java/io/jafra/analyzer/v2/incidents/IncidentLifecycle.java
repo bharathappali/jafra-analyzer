@@ -5,8 +5,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Open and close rules. UNKNOWN counts as neither a good nor a bad window. That treatment is a
- * proposal, pending KUSMA.
+ * Open and close rules. An UNKNOWN window does not occupy a slot. "Last 3 windows" means the last 3
+ * non-UNKNOWN windows of this (jvm, type). The close streak counts consecutive OK windows and skips
+ * UNKNOWN: UNKNOWN neither breaks nor extends it. So bad, UNKNOWN, good, bad opens (2 of the last 3
+ * non-UNKNOWN), and good, good, UNKNOWN, good closes.
+ *
+ * <p>incident_windows records every window from t0 through the last bad window, including the good
+ * windows in between. A bad window is written at once. Good windows are held and written when the
+ * next bad window arrives, and dropped on close. No recorded window has ts &gt;= t1.
  */
 public final class IncidentLifecycle {
     public enum Kind {
@@ -28,20 +34,22 @@ public final class IncidentLifecycle {
         CLOSE
     }
 
-    private final ArrayDeque<Mark> recent = new ArrayDeque<>();
+    private final ArrayDeque<Mark> trail = new ArrayDeque<>();
+    private final List<Mark> held = new ArrayList<>();
+    private final List<Long> recorded = new ArrayList<>();
+    private List<Long> stepRecorded = List.of();
     private Open open;
     private Open lastClosed;
     private int goodStreak;
     private long lastBadTo = -1;
 
     public Action accept(Kind kind, Mark mark) {
-        recent.addLast(mark);
-        while (recent.size() > 3) {
-            recent.removeFirst();
-        }
+        stepRecorded = List.of();
+        trail.addLast(mark);
+        trim();
         if (mark.state() == State.OK) {
             goodStreak++;
-        } else if (mark.state() == State.WARNING || mark.state() == State.CRITICAL) {
+        } else if (isBad(mark)) {
             goodStreak = 0;
             lastBadTo = mark.toMs();
         }
@@ -49,25 +57,47 @@ public final class IncidentLifecycle {
             if (!opens(kind)) {
                 return Action.NONE;
             }
-            open = new Open(openingT0(), mark);
+            long t0 = openingT0();
+            open = new Open(t0, worstSince(t0), mark);
             goodStreak = 0;
+            remember(from(t0));
             return Action.OPEN;
         }
         if (goodStreak >= 3) {
+            held.clear();
             lastClosed = open;
             open = null;
             goodStreak = 0;
             return Action.CLOSE;
         }
         if (mark.state() == State.UNKNOWN) {
+            held.add(mark);
             return Action.NONE;
         }
-        open.latest = mark;
-        if (mark.score() > open.worst.score() || (mark.score() == open.worst.score() && mark.fromMs() >= open.worst.fromMs())) {
-            open.worst = mark;
-            open.peakAt = mark.fromMs();
+        if (isBad(mark)) {
+            List<Long> write = new ArrayList<>();
+            for (Mark waiting : held) {
+                write.add(waiting.fromMs());
+            }
+            held.clear();
+            write.add(mark.fromMs());
+            remember(write);
+            note(mark);
+            return Action.UPDATE;
         }
+        held.add(mark);
+        note(mark);
         return Action.UPDATE;
+    }
+
+    /** Timestamps written by the latest {@link #accept}. */
+    public List<Long> recordedThisStep() {
+        return stepRecorded;
+    }
+
+    /** Every incident_windows timestamp this lifecycle has asked to store. */
+    public List<Long> recordedWindows() {
+        return List.copyOf(recorded);
     }
 
     public Open open() {
@@ -82,42 +112,64 @@ public final class IncidentLifecycle {
         return lastBadTo;
     }
 
-    public List<Mark> recent() {
-        return List.copyOf(recent);
+    public int goodStreak() {
+        return goodStreak;
     }
 
-    private boolean opens(Kind kind) {
-        int bad = 0;
-        for (Mark mark : recent) {
-            if (mark.state() == State.WARNING || mark.state() == State.CRITICAL) {
-                bad++;
+    /**
+     * Puts an incident back after a restart. {@code streak} is the number of processed windows after
+     * the last bad window.
+     */
+    public void restore(long t0, Mark worst, Mark latest, int streak, long badTo) {
+        open = new Open(t0, worst, latest);
+        goodStreak = streak;
+        lastBadTo = badTo;
+        held.clear();
+    }
+
+    /**
+     * Both bounds: 60 at warning, 90 at critical, linear between, linear above critical up to 100 at
+     * 2× critical. Below warning: 60·value/warning, or 0 when warning ≤ 0. Warning-only and
+     * critical-only bands are scored here too (step 1 uses the same method).
+     */
+    public static double score(double value, Band band) {
+        if (band == null || Double.isNaN(value)) {
+            return 0d;
+        }
+        Double warning = band.warning();
+        Double critical = band.critical();
+        if (warning != null && critical != null) {
+            if (value <= warning) {
+                return warning <= 0d ? 0d : Math.min(60d, 60d * value / warning);
             }
-        }
-        if (kind == Kind.INSTANT) {
-            Mark last = recent.peekLast();
-            return last != null && (last.state() == State.WARNING || last.state() == State.CRITICAL);
-        }
-        return bad >= 2;
-    }
-
-    private long openingT0() {
-        for (Mark mark : recent) {
-            if (mark.state() == State.WARNING || mark.state() == State.CRITICAL) {
-                return mark.fromMs();
+            if (value >= critical) {
+                return above(value, critical);
             }
+            return 60d + 30d * (value - warning) / (critical - warning);
         }
-        return recent.peekLast().fromMs();
+        if (warning != null) {
+            if (warning <= 0d) {
+                return 0d;
+            }
+            if (value <= warning) {
+                return Math.min(60d, 60d * value / warning);
+            }
+            return Math.min(89d, 60d + 29d * (value - warning) / warning);
+        }
+        if (critical != null) {
+            if (value < critical) {
+                return critical <= 0d ? 0d : Math.min(90d, 90d * value / critical);
+            }
+            return above(value, critical);
+        }
+        return 0d;
     }
 
-    public static double score(double value, double warning, double critical) {
-        double high = critical <= warning ? warning + 1d : critical;
-        if (value <= warning) {
-            return warning == 0d ? 0d : Math.min(60d, 60d * value / warning);
+    private static double above(double value, double critical) {
+        if (critical <= 0d) {
+            return 100d;
         }
-        if (value >= high) {
-            return Math.min(100d, 90d + 10d * (value - high) / high);
-        }
-        return 60d + 30d * (value - warning) / (high - warning);
+        return Math.min(100d, 90d + 10d * (value - critical) / critical);
     }
 
     public static String confidence(double score, boolean related) {
@@ -130,21 +182,138 @@ public final class IncidentLifecycle {
         return "weak";
     }
 
+    private void remember(List<Long> timestamps) {
+        recorded.addAll(timestamps);
+        stepRecorded = List.copyOf(timestamps);
+    }
+
+    private List<Long> from(long t0) {
+        List<Long> timestamps = new ArrayList<>();
+        for (Mark mark : trail) {
+            if (mark.fromMs() >= t0) {
+                timestamps.add(mark.fromMs());
+            }
+        }
+        return timestamps;
+    }
+
+    private void note(Mark mark) {
+        open.latest = mark;
+        if (mark.score() > open.worst.score()
+                || (mark.score() == open.worst.score() && mark.fromMs() >= open.worst.fromMs())) {
+            open.worst = mark;
+            open.peakAt = mark.fromMs();
+        }
+    }
+
+    private Mark worstSince(long t0) {
+        Mark worst = null;
+        for (Mark mark : trail) {
+            if (mark.fromMs() < t0 || !isBad(mark)) {
+                continue;
+            }
+            if (worst == null
+                    || mark.score() > worst.score()
+                    || (mark.score() == worst.score() && mark.fromMs() >= worst.fromMs())) {
+                worst = mark;
+            }
+        }
+        return worst == null ? trail.peekLast() : worst;
+    }
+
+    private void trim() {
+        List<Mark> decided = new ArrayList<>();
+        for (Mark mark : trail) {
+            if (mark.state() != State.UNKNOWN) {
+                decided.add(mark);
+            }
+        }
+        if (decided.size() <= 3) {
+            return;
+        }
+        long keepFrom = decided.get(decided.size() - 3).fromMs();
+        while (!trail.isEmpty() && trail.peekFirst().fromMs() < keepFrom) {
+            trail.removeFirst();
+        }
+    }
+
+    private boolean opens(Kind kind) {
+        Mark last = trail.peekLast();
+        if (last == null || !isBad(last)) {
+            return false;
+        }
+        if (kind == Kind.INSTANT) {
+            return true;
+        }
+        int bad = 0;
+        for (Mark mark : lastDecided()) {
+            if (isBad(mark)) {
+                bad++;
+            }
+        }
+        return bad >= 2;
+    }
+
+    private long openingT0() {
+        for (Mark mark : lastDecided()) {
+            if (isBad(mark)) {
+                return mark.fromMs();
+            }
+        }
+        return trail.peekLast().fromMs();
+    }
+
+    private List<Mark> lastDecided() {
+        List<Mark> decided = new ArrayList<>();
+        for (Mark mark : trail) {
+            if (mark.state() != State.UNKNOWN) {
+                decided.add(mark);
+            }
+        }
+        if (decided.size() <= 3) {
+            return decided;
+        }
+        return decided.subList(decided.size() - 3, decided.size());
+    }
+
+    private static boolean isBad(Mark mark) {
+        return mark.state() == State.WARNING || mark.state() == State.CRITICAL;
+    }
+
     public static final class Mark {
         private final long fromMs;
         private final long toMs;
-        private final State state;
-        private final double value;
+        private final WindowVerdict verdict;
         private final double score;
-        private final String headline;
 
-        public Mark(long fromMs, long toMs, State state, double value, double score, String headline) {
+        public Mark(long fromMs, long toMs, WindowVerdict verdict, double score) {
             this.fromMs = fromMs;
             this.toMs = toMs;
-            this.state = state;
-            this.value = value;
+            this.verdict = verdict;
             this.score = score;
-            this.headline = headline;
+        }
+
+        public Mark(long fromMs, long toMs, State state, double value, double score, String headline) {
+            this(
+                    fromMs,
+                    toMs,
+                    new WindowVerdict(
+                            state,
+                            value,
+                            "",
+                            null,
+                            new Band(null, null),
+                            "",
+                            "",
+                            null,
+                            List.of(),
+                            List.of(),
+                            "",
+                            headline,
+                            List.of(),
+                            java.util.Set.of(),
+                            null),
+                    score);
         }
 
         public long fromMs() {
@@ -156,11 +325,11 @@ public final class IncidentLifecycle {
         }
 
         public State state() {
-            return state;
+            return verdict.state();
         }
 
         public double value() {
-            return value;
+            return verdict.value() == null ? Double.NaN : verdict.value();
         }
 
         public double score() {
@@ -168,7 +337,11 @@ public final class IncidentLifecycle {
         }
 
         public String headline() {
-            return headline;
+            return verdict.headline();
+        }
+
+        public WindowVerdict verdict() {
+            return verdict;
         }
     }
 
@@ -178,11 +351,11 @@ public final class IncidentLifecycle {
         private Mark worst;
         private long peakAt;
 
-        Open(long t0, Mark mark) {
+        Open(long t0, Mark worst, Mark latest) {
             this.t0 = t0;
-            this.latest = mark;
-            this.worst = mark;
-            this.peakAt = mark.fromMs();
+            this.worst = worst;
+            this.latest = latest;
+            this.peakAt = worst.fromMs();
         }
 
         public long t0() {

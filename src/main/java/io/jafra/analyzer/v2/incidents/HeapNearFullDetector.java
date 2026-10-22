@@ -1,7 +1,8 @@
 package io.jafra.analyzer.v2.incidents;
 
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Optional;
+import java.util.Set;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -15,7 +16,6 @@ import io.jafra.analyzer.v2.store.V2Store.RollupRow;
 public class HeapNearFullDetector implements Detector {
     private final double warningPct;
     private final double criticalPct;
-    private final ConcurrentHashMap<Integer, Double> lastOccupancy = new ConcurrentHashMap<>();
 
     @Inject
     public HeapNearFullDetector(
@@ -46,43 +46,50 @@ public class HeapNearFullDetector implements Detector {
     }
 
     @Override
-    public List<Integer> jdks() {
-        return List.of(17, 21, 25);
+    public Set<Integer> jdks() {
+        return Set.of(17, 21, 25);
     }
 
     @Override
-    public Verdict evaluate(WindowInput input) {
-        RollupRow row = input.totals().get("heap.occupancy.pct");
+    public WindowVerdict evaluate(WindowInput input) {
+        Optional<RollupRow> row = input.window().total("heap.occupancy.pct");
+        Double value = row.isPresent() && row.get().count() > 0 ? row.get().avg() : null;
+        Long measuredAt = null;
         boolean carried = false;
-        Double value = row == null || row.count() == 0 ? null : row.avg();
         if (value == null) {
-            value = lastOccupancy.get(input.jvm().jvmId());
-            if (value == null) {
-                return Verdict.unknown();
+            Optional<RollupRow> prior = input.window().lastBefore("heap.occupancy.pct");
+            if (prior.isEmpty()) {
+                return WindowVerdict.unknown("no GC yet in this JVM", Set.of());
             }
+            value = prior.get().avg();
+            measuredAt = prior.get().ts();
             carried = true;
-        } else {
-            lastOccupancy.put(input.jvm().jvmId(), value);
         }
+        Band band = new Band(warningPct, criticalPct);
+        Set<String> flags = carried ? Set.of("carried_forward") : Set.of();
         State state = value >= criticalPct ? State.CRITICAL : value >= warningPct ? State.WARNING : State.OK;
-        List<String> flags = carried ? List.of("carried_forward") : List.of();
+        String reason = "warning >= " + warningPct + "%; critical >= " + criticalPct + "% (proposal, pending KUSMA)";
         if (state == State.OK) {
-            return new Verdict(State.OK, value, "pct", warningPct, criticalPct, "", "", "", List.of(), flags, "");
+            return new WindowVerdict(
+                    State.OK, value, "pct", 100d, band, family(), reason, null, List.of(), List.of(), "", "", List.of(), flags, measuredAt);
         }
         String headline = "Heap stayed " + Math.round(value) + "% full after GC";
         String felt = "The heap stayed " + Math.round(value) + "% full even after GC, so GCs ran more often and freed less.";
-        String reason = "warning >= " + warningPct + "%; critical >= " + criticalPct + "% (proposal, pending KUSMA)";
-        return new Verdict(
+        return new WindowVerdict(
                 state,
                 value,
                 "pct",
-                warningPct,
-                criticalPct,
-                headline,
-                felt,
-                "allocating class",
+                100d,
+                band,
+                family(),
+                reason,
+                new Who("class", "allocating class", null, true),
+                List.of(),
                 List.of("look at the top allocation site", "if it keeps rising after full GCs, check for a leak (live set trend)"),
+                felt,
+                headline,
+                List.of(),
                 flags,
-                reason);
+                measuredAt);
     }
 }

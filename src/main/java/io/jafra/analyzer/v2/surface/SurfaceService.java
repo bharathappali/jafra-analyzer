@@ -20,6 +20,8 @@ import io.jafra.analyzer.v2.catalogue.ViewSpec;
 import io.jafra.analyzer.v2.api.V2Range;
 import io.jafra.analyzer.v2.api.V2Times;
 import io.jafra.analyzer.v2.catalogue.Catalogue;
+import io.jafra.analyzer.v2.incidents.Baseline;
+import io.jafra.analyzer.v2.incidents.BaselineService;
 import io.jafra.analyzer.v2.catalogue.ChartSpec;
 import io.jafra.analyzer.v2.catalogue.MetricSpec;
 import io.jafra.analyzer.v2.query.QueryService;
@@ -37,16 +39,27 @@ import io.jafra.analyzer.v2.store.V2Store.RollupRow;
 public class SurfaceService {
     static final int SERIES_CAP = 360;
     static final int MARKER_CAP = 200;
-    static final int BASELINE_WINDOWS = 120;
     static final int PROVEN_BASELINE = 60;
 
     private final V2Store store;
     private final Catalogue catalogue;
+    private final BaselineService baselines;
 
     @Inject
-    public SurfaceService(V2Store store, Catalogue catalogue) {
+    public SurfaceService(V2Store store, Catalogue catalogue, BaselineService baselines) {
         this.store = store;
         this.catalogue = catalogue;
+        this.baselines = baselines;
+    }
+
+    /** Overview lanes for one range. Incident groups are chosen from these. */
+    public List<Lane> overviewLanes(JvmRow jvm, long fromMs, long toMs) throws IOException {
+        Map<String, String> levels = store.incidentLevels(jvm.jvmId(), fromMs, toMs);
+        List<Lane> lanes = new ArrayList<>();
+        for (String group : catalogue.groups()) {
+            lanes.add(lane(jvm, group, fromMs, toMs, levels.get(group)));
+        }
+        return lanes;
     }
 
     public WorkloadList workloads(String cluster) {
@@ -175,9 +188,13 @@ public class SurfaceService {
         if (value == null) {
             return new Lane(group, "unavailable", metric.name(), metric.unit(), null, null, null, List.of());
         }
-        List<RollupRow> baseline = store.recentTotals(jvm.jvmId(), metric.name(), group, toMs, BASELINE_WINDOWS);
-        Double normal = normal(jvm, metric, baseline);
-        boolean unproven = baseline.size() < PROVEN_BASELINE;
+        String stat = metric.overviewStat();
+        if (stat == null || stat.isBlank()) {
+            stat = "avg";
+        }
+        Baseline baseline = baselines.baseline(jvm.jvmId(), metric.name(), "", group, stat, toMs);
+        Double normal = baseline.median();
+        boolean unproven = baseline.n() < PROVEN_BASELINE;
         Double vs = vsNormal(value, normal);
         List<String> flags = new ArrayList<>(QueryService.flags(metric, jvm));
         if (unproven) {
@@ -209,40 +226,6 @@ public class SurfaceService {
             count += row.count();
         }
         return count == 0 ? null : sum / count;
-    }
-
-    private Double normal(JvmRow jvm, MetricSpec metric, List<RollupRow> baseline) throws IOException {
-        if (baseline.isEmpty()) {
-            return null;
-        }
-        List<Double> values = new ArrayList<>();
-        if ("p99".equals(metric.overviewStat())) {
-            long oldest = baseline.get(baseline.size() - 1).ts();
-            long newest = baseline.get(0).ts() + 1;
-            Map<Long, Map<Integer, Long>> hist = store.readHistByWindow(jvm.jvmId(), metric.name(), oldest, newest);
-            for (RollupRow row : baseline) {
-                Map<Integer, Long> buckets = hist.get(row.ts());
-                if (buckets == null || buckets.isEmpty()) {
-                    continue;
-                }
-                values.add(LogHistogram.percentile(buckets, 0.99, row.min(), row.max()));
-            }
-        } else {
-            for (RollupRow row : baseline) {
-                if (row.count() > 0) {
-                    values.add(row.sum() / row.count());
-                }
-            }
-        }
-        if (values.isEmpty()) {
-            return null;
-        }
-        values.sort(Double::compare);
-        int size = values.size();
-        if (size % 2 == 1) {
-            return values.get(size / 2);
-        }
-        return (values.get(size / 2 - 1) + values.get(size / 2)) / 2d;
     }
 
     private MetricSeries series(JvmRow jvm, MetricSpec metric, V2Range range, long step, boolean minute, Long sinceMs)
