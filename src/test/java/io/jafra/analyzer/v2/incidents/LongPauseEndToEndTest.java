@@ -2,6 +2,7 @@ package io.jafra.analyzer.v2.incidents;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -72,11 +73,13 @@ class LongPauseEndToEndTest {
 
         String base = "/v2/jvms/v2inc/" + pod + "/app";
         String id = given()
-                .queryParam("type", "long_pause")
+                .queryParam("from", "0")
+                .queryParam("to", String.valueOf(System.currentTimeMillis() + 60_000L))
                 .get(base + "/incidents")
                 .then()
                 .statusCode(200)
-                .body("total", equalTo(1))
+                .body("incidents", hasSize(1))
+                .body("incidents[0].type", equalTo("long_pause"))
                 .extract()
                 .path("incidents[0].id");
         JsonPath body = given().get(base + "/incidents/" + id).then().statusCode(200).extract().jsonPath();

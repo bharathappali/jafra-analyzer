@@ -48,7 +48,7 @@ public class EventService {
         if (!spec.onJdk(jvm.jdkMajor())) {
             throw V2Exception.notOnJdk("needs JDK " + spec.jdk());
         }
-        String order = sort == null || sort.isBlank() ? "time" : sort.trim();
+        String order = sort == null || sort.isBlank() ? "duration" : sort.trim();
         if (!"time".equals(order) && !"duration".equals(order)) {
             throw V2Exception.unsupportedStat("sort is time or duration", List.of("time", "duration"));
         }

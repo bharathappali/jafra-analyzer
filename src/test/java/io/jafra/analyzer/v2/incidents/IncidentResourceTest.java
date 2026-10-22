@@ -3,6 +3,7 @@ package io.jafra.analyzer.v2.incidents;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.nio.file.Files;
@@ -39,7 +40,8 @@ class IncidentResourceTest {
                 .then()
                 .statusCode(200)
                 .body("incidents", hasSize(2))
-                .body("truncated", equalTo(false))
+                .body("truncated", nullValue())
+                .body("total", nullValue())
                 .body("incidents[0].type", equalTo("heap_near_full"))
                 .body("incidents[0].level", equalTo("critical"))
                 .body("incidents[0].status", equalTo("open"))
@@ -89,14 +91,14 @@ class IncidentResourceTest {
         chunks.commit(write, metadata);
         writer.awaitIdle(Duration.ofSeconds(10));
 
-        Integer pauses = given()
-                .queryParam("type", "long_pause")
+        given()
+                .queryParam("from", "0")
+                .queryParam("to", String.valueOf(System.currentTimeMillis() + 60_000L))
                 .get("/v2/jvms/v2inc/" + pod + "/app/incidents")
                 .then()
                 .statusCode(200)
-                .extract()
-                .path("total");
-        assertEquals(1, pauses);
+                .body("incidents", hasSize(1))
+                .body("incidents[0].type", equalTo("long_pause"));
     }
 
     private static WindowData window(String pod, long from, String metric, double value) {

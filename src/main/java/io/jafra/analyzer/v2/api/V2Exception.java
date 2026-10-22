@@ -30,19 +30,19 @@ public final class V2Exception extends RuntimeException {
     }
 
     public static V2Exception unknownMetric(String message, List<String> valid) {
-        return new V2Exception(400, "unknown_metric", message, null, valid);
+        return new V2Exception(400, "unknown_metric", message, "use one of the listed names", valid);
     }
 
     public static V2Exception unsupportedStat(String message, List<String> valid) {
-        return new V2Exception(400, "unsupported_stat", message, null, valid);
+        return new V2Exception(400, "unsupported_stat", message, "use one of the listed stats", valid);
     }
 
     public static V2Exception unsupportedBy(String message, List<String> valid) {
-        return new V2Exception(400, "unsupported_by", message, null, valid);
+        return new V2Exception(400, "unsupported_by", message, "use one of the listed values", valid);
     }
 
     public static V2Exception notOnJdk(String message) {
-        return new V2Exception(422, "not_on_this_jdk", message, null, List.of());
+        return new V2Exception(422, "not_on_this_jdk", message, "this data is not on the JVM's JDK", List.of());
     }
 
     public static V2Exception nmtOff() {
@@ -55,15 +55,23 @@ public final class V2Exception extends RuntimeException {
     }
 
     public static V2Exception noData(String message, String nearest) {
-        return new V2Exception(404, "no_data", message, null, nearest == null ? List.of() : List.of(nearest));
+        return new V2Exception(404, "no_data", message, "try the nearest time that has data", nearest == null ? List.of() : List.of(nearest));
     }
 
     public static V2Exception notEnough(int n) {
-        return new V2Exception(422, "not_enough_data", "not enough data yet (" + n + "/30)", null, List.of());
+        return new V2Exception(422, "not_enough_data", "not enough data yet (" + n + "/30)", "wait for more windows", List.of());
     }
 
     public static V2Exception unknownIncident(List<String> latest) {
-        return new V2Exception(404, "unknown_incident", "unknown incident", null, latest);
+        return new V2Exception(404, "unknown_incident", "unknown incident", "use one of the latest ids", latest);
+    }
+
+    public static V2Exception idRequired(List<String> latest) {
+        return new V2Exception(404, "unknown_incident", "id is required", "pass id", latest);
+    }
+
+    public static V2Exception notReady() {
+        return new V2Exception(503, "not_ready", "storage migration in progress", "retry shortly", List.of());
     }
 
     public static V2Exception unknownJvm() {
@@ -75,6 +83,6 @@ public final class V2Exception extends RuntimeException {
     }
 
     public static V2Exception unknownChart(List<String> ids) {
-        return new V2Exception(404, "unknown_chart", "unknown chart", null, ids);
+        return new V2Exception(404, "unknown_chart", "unknown chart", "use one of the listed chart ids", ids);
     }
 }

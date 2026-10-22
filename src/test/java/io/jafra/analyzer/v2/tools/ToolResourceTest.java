@@ -71,9 +71,10 @@ class ToolResourceTest {
                 .get(base + "/tools/get_jvm_info")
                 .then()
                 .statusCode(200)
-                .body("jdk", equalTo(21))
-                .body("profile", equalTo("aggressive"))
-                .body("nmt", equalTo("off"));
+                .body("k8s.namespace", equalTo("v2tool"))
+                .body("k8s.pod", equalTo(pod))
+                .body("k8s.container", equalTo("app"))
+                .body("flags.source", equalTo("jvmArguments"));
     }
 
     private static String body(String path, String... params) {

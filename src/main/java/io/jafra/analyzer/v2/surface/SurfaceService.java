@@ -28,6 +28,7 @@ import io.jafra.analyzer.v2.query.QueryService;
 import io.jafra.analyzer.v2.rollup.LogHistogram;
 import io.jafra.analyzer.v2.store.V2Store;
 import io.jafra.analyzer.v2.store.V2Store.EventRow;
+import io.jafra.analyzer.v2.store.V2Store.IncidentRecord;
 import io.jafra.analyzer.v2.store.V2Store.JvmRow;
 import io.jafra.analyzer.v2.store.V2Store.RollupRow;
 
@@ -55,9 +56,10 @@ public class SurfaceService {
     /** Overview lanes for one range. Incident groups are chosen from these. */
     public List<Lane> overviewLanes(JvmRow jvm, long fromMs, long toMs) throws IOException {
         Map<String, String> levels = store.incidentLevels(jvm.jvmId(), fromMs, toMs);
+        List<IncidentRecord> incidents = store.incidents(jvm.jvmId());
         List<Lane> lanes = new ArrayList<>();
         for (String group : catalogue.groups()) {
-            lanes.add(lane(jvm, group, fromMs, toMs, levels.get(group)));
+            lanes.add(lane(jvm, group, fromMs, toMs, levels.get(group), incidents));
         }
         return lanes;
     }
@@ -83,12 +85,13 @@ public class SurfaceService {
         long toMs = range.to().toEpochMilli();
         try {
             Map<String, String> levels = store.incidentLevels(jvm.jvmId(), fromMs, toMs);
+            List<IncidentRecord> incidents = store.incidents(jvm.jvmId());
             List<Lane> lanes = new ArrayList<>();
             for (String group : catalogue.groups()) {
-                lanes.add(lane(jvm, group, fromMs, toMs, levels.get(group)));
+                lanes.add(lane(jvm, group, fromMs, toMs, levels.get(group), incidents));
             }
             lanes.sort(laneOrder());
-            return new Report(jvmRef(jvm), window(range, null), lanes);
+            return new Report(window(range, null), jvm.jdkMajor(), lanes);
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
@@ -136,61 +139,75 @@ public class SurfaceService {
         }
     }
 
-    public Timeline timeline(JvmRow jvm, String since, String last, String from, String to) {
+    public Timeline timeline(JvmRow jvm, String last, String from, String to) {
         V2Range range = range(jvm, last, from, to);
-        Long sinceMs = since == null || since.isBlank() ? null : V2Times.parse(since, "since").toEpochMilli();
-        long used = QueryService.coarsen(5_000, range.to().toEpochMilli() - range.from().toEpochMilli(), SERIES_CAP);
-        boolean minute = used >= 60_000 && used % 60_000 == 0;
+        long fromMs = range.from().toEpochMilli();
+        long toMs = range.to().toEpochMilli();
         try {
-            Map<Long, List<LanePoint>> buckets = new LinkedHashMap<>();
-            for (MetricSpec metric : overviewByGroup().values()) {
-                if (!metric.onJdk(jvm.jdkMajor()) || (metric.optInNmt() && !QueryService.nmtOn(jvm))) {
-                    continue;
-                }
-                for (RollupRow row : totals(jvm, metric.name(), minute, range)) {
-                    long bucket = Math.floorDiv(row.ts(), used) * used;
-                    if (sinceMs != null && bucket <= sinceMs) {
-                        continue;
+            List<long[]> windows = store.windowBounds(jvm.jvmId(), fromMs, toMs);
+            List<IncidentRecord> incidents = store.incidents(jvm.jvmId());
+            Map<String, MetricSpec> metrics = overviewByGroup();
+            List<TimelineLane> lanes = new ArrayList<>();
+            for (String group : catalogue.groups()) {
+                List<Span> spans = new ArrayList<>();
+                for (long[] window : windows) {
+                    Map<String, RollupRow> totals = store.readTotalsAt(jvm.jvmId(), window[0]);
+                    String state = windowState(jvm, metrics.get(group), totals, incidents, group, window[0], window[1]);
+                    if (!spans.isEmpty() && spans.get(spans.size() - 1).state.equals(state)) {
+                        Span lastSpan = spans.remove(spans.size() - 1);
+                        spans.add(new Span(lastSpan.from, window[1], state));
+                    } else {
+                        spans.add(new Span(window[0], window[1], state));
                     }
-                    buckets.computeIfAbsent(bucket, ignored -> new ArrayList<>())
-                            .add(new LanePoint(metric.group(), row.avg()));
+                }
+                lanes.add(new TimelineLane(group, segments(capSpans(spans))));
+            }
+            List<IncidentRecord> overlapping = new ArrayList<>();
+            for (IncidentRecord row : incidents) {
+                if (row.t0() <= toMs && (row.t1() == null || row.t1() >= fromMs)) {
+                    overlapping.add(row);
                 }
             }
-            List<TimelinePoint> points = new ArrayList<>();
-            for (Map.Entry<Long, List<LanePoint>> entry : buckets.entrySet()) {
-                points.add(new TimelinePoint(entry.getKey(), entry.getValue()));
+            overlapping.sort(Comparator
+                    .comparingInt((IncidentRecord row) -> "critical".equals(row.level()) ? 0 : 1)
+                    .thenComparing(Comparator.comparingLong(IncidentRecord::t0).reversed()));
+            if (overlapping.size() > 20) {
+                overlapping = overlapping.subList(0, 20);
             }
-            if (points.size() > SERIES_CAP) {
-                points = points.subList(points.size() - SERIES_CAP, points.size());
+            List<TimelineIncident> listed = new ArrayList<>();
+            for (IncidentRecord row : overlapping) {
+                listed.add(new TimelineIncident(
+                        row.id(),
+                        row.type(),
+                        row.group(),
+                        row.level(),
+                        V2Times.text(row.t0()),
+                        row.t1() == null ? null : V2Times.text(row.t1())));
             }
-            return new Timeline(
-                    window(range, QueryService.nameOf(used)),
-                    QueryService.nameOf(used),
-                    points,
-                    markers(jvm, null, range, sinceMs));
+            return new Timeline(window(range, null), lanes, listed);
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
     }
 
-    private Lane lane(JvmRow jvm, String group, long fromMs, long toMs, String incidentLevel) throws IOException {
+    private Lane lane(
+            JvmRow jvm, String group, long fromMs, long toMs, String incidentLevel, List<IncidentRecord> incidents)
+            throws IOException {
         MetricSpec metric = overviewByGroup().get(group);
+        List<String> open = openIds(incidents, group, fromMs, toMs);
+        String stat = statOf(metric);
         if (metric == null) {
-            return new Lane(group, "unavailable", null, null, null, null, null, List.of());
+            return new Lane(group, "unavailable", null, stat, null, null, null, null, open, List.of());
         }
         if (!metric.onJdk(jvm.jdkMajor())) {
-            return new Lane(group, "unavailable", metric.name(), metric.unit(), null, null, null, List.of("not_on_this_jdk"));
+            return new Lane(group, "unavailable", metric.name(), stat, null, metric.unit(), null, null, open, List.of("not_on_this_jdk"));
         }
         if (metric.optInNmt() && !QueryService.nmtOn(jvm)) {
-            return new Lane(group, "unavailable", metric.name(), metric.unit(), null, null, null, List.of("nmt_off"));
+            return new Lane(group, "unavailable", metric.name(), stat, null, metric.unit(), null, null, open, List.of("nmt_off"));
         }
         Double value = value(jvm, metric, fromMs, toMs);
         if (value == null) {
-            return new Lane(group, "unavailable", metric.name(), metric.unit(), null, null, null, List.of());
-        }
-        String stat = metric.overviewStat();
-        if (stat == null || stat.isBlank()) {
-            stat = "avg";
+            return new Lane(group, "unavailable", metric.name(), stat, null, metric.unit(), null, null, open, List.of());
         }
         Baseline baseline = baselines.baseline(jvm.jvmId(), metric.name(), "", group, stat, toMs);
         Double normal = baseline.median();
@@ -201,8 +218,97 @@ public class SurfaceService {
             flags.add("unproven_baseline");
         }
         String state = incidentLevel == null ? "ok" : incidentLevel;
-        return new Lane(group, state, metric.name(), metric.unit(), value, normal, vs, flags);
+        return new Lane(group, state, metric.name(), stat, value, metric.unit(), normal, vs, open, flags);
     }
+
+    private static String statOf(MetricSpec metric) {
+        if (metric == null) {
+            return null;
+        }
+        String stat = metric.overviewStat();
+        return stat == null || stat.isBlank() ? "avg" : stat;
+    }
+
+    private static List<String> openIds(List<IncidentRecord> incidents, String group, long fromMs, long toMs) {
+        List<String> ids = new ArrayList<>();
+        for (IncidentRecord row : incidents) {
+            if (!group.equals(row.group()) || !"open".equals(row.status())) {
+                continue;
+            }
+            if (row.t0() <= toMs && (row.t1() == null || row.t1() >= fromMs)) {
+                ids.add(row.id());
+            }
+        }
+        return ids;
+    }
+
+    private static String windowState(
+            JvmRow jvm,
+            MetricSpec metric,
+            Map<String, RollupRow> totals,
+            List<IncidentRecord> incidents,
+            String group,
+            long fromMs,
+            long toMs) {
+        if (metric == null || !metric.onJdk(jvm.jdkMajor()) || (metric.optInNmt() && !QueryService.nmtOn(jvm))) {
+            return "unavailable";
+        }
+        if (!totals.containsKey(metric.name())) {
+            return "unavailable";
+        }
+        String worst = null;
+        for (IncidentRecord row : incidents) {
+            if (!group.equals(row.group())) {
+                continue;
+            }
+            long end = row.t1() == null ? Long.MAX_VALUE : row.t1();
+            if (row.t0() < toMs && end >= fromMs && rank(row.level()) > rank(worst)) {
+                worst = row.level();
+            }
+        }
+        return worst == null ? "ok" : worst;
+    }
+
+    private static int rank(String level) {
+        if ("critical".equals(level)) {
+            return 2;
+        }
+        if ("warning".equals(level)) {
+            return 1;
+        }
+        return 0;
+    }
+
+    private static List<Span> capSpans(List<Span> spans) {
+        List<Span> capped = new ArrayList<>(spans);
+        while (capped.size() > SERIES_CAP) {
+            int best = 0;
+            long bestLen = Long.MAX_VALUE;
+            for (int i = 0; i < capped.size() - 1; i++) {
+                long len = capped.get(i).to - capped.get(i).from + capped.get(i + 1).to - capped.get(i + 1).from;
+                if (len < bestLen) {
+                    bestLen = len;
+                    best = i;
+                }
+            }
+            Span left = capped.get(best);
+            Span right = capped.get(best + 1);
+            String state = right.to - right.from > left.to - left.from ? right.state : left.state;
+            capped.set(best, new Span(left.from, right.to, state));
+            capped.remove(best + 1);
+        }
+        return capped;
+    }
+
+    private static List<Segment> segments(List<Span> spans) {
+        List<Segment> segments = new ArrayList<>();
+        for (Span span : spans) {
+            segments.add(new Segment(V2Times.text(span.from), V2Times.text(span.to), span.state));
+        }
+        return segments;
+    }
+
+    private record Span(long from, long to, String state) {}
 
     private Double value(JvmRow jvm, MetricSpec metric, long fromMs, long toMs) throws IOException {
         if ("p99".equals(metric.overviewStat())) {
@@ -408,21 +514,21 @@ public class SurfaceService {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record JvmRef(String namespace, String pod, String container, String cluster, String start, int jdk) {}
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Lane(
             String group,
             String state,
             String metric,
-            String unit,
+            String stat,
             Double value,
+            String unit,
             Double normal,
             Double vsNormal,
+            List<String> openIncidents,
             List<String> flags) {}
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record Report(JvmRef jvm, TimeWindow window, List<Lane> groups) {}
+    public record Report(TimeWindow window, int jdk, List<Lane> groups) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -481,15 +587,15 @@ public class SurfaceService {
             List<MetricSeries> metrics,
             List<Marker> markers) {}
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record LanePoint(String group, double v) {}
+    public record Segment(String from, String to, String state) {}
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record TimelinePoint(long t, List<LanePoint> lanes) {}
+    public record TimelineLane(String group, List<Segment> segments) {}
 
-    @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record Timeline(TimeWindow window, String stepUsed, List<TimelinePoint> points, List<Marker> markers) {}
+    public record TimelineIncident(String id, String type, String group, String level, String t0, String t1) {}
+
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record Timeline(TimeWindow window, List<TimelineLane> lanes, List<TimelineIncident> incidents) {}
 }

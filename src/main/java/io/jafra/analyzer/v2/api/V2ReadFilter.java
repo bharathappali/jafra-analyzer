@@ -32,7 +32,7 @@ public class V2ReadFilter {
         return Response.status(503)
                 .header("Retry-After", "30")
                 .type(MediaType.APPLICATION_JSON)
-                .entity(new V2Error("not_ready", "storage migration in progress", "retry shortly", java.util.List.of()))
+                .entity(V2Exception.notReady().body())
                 .build();
     }
 }

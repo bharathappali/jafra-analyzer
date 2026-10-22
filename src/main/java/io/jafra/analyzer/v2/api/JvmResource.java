@@ -107,11 +107,10 @@ public class JvmResource {
             @RestPath String container,
             @QueryParam("cluster") String cluster,
             @QueryParam("start") String start,
-            @QueryParam("since") String since,
             @QueryParam("last") String last,
             @QueryParam("from") String from,
             @QueryParam("to") String to) {
-        return surface.timeline(jvms.resolve(namespace, pod, container, cluster, start), since, last, from, to);
+        return surface.timeline(jvms.resolve(namespace, pod, container, cluster, start), last, from, to);
     }
 
     @GET
@@ -180,14 +179,14 @@ public class JvmResource {
             @QueryParam("state") String state,
             @QueryParam("endpoint") String endpoint,
             @QueryParam("focus") String focus,
+            @QueryParam("top") Integer top,
             @QueryParam("last") String last,
             @QueryParam("from") String from,
             @QueryParam("to") String to,
-            @QueryParam("vs_from") String vsFrom,
-            @QueryParam("vs_to") String vsTo) {
+            @QueryParam("vs") String vs) {
         return frames.top(
                 jvms.resolve(namespace, pod, container, cluster, start),
-                kind, thread, state, endpoint, focus, last, from, to, vsFrom, vsTo);
+                kind, thread, state, endpoint, focus, top, last, from, to, vs);
     }
 
     @GET
@@ -236,8 +235,12 @@ public class JvmResource {
             @QueryParam("start") String start,
             @QueryParam("level") String level,
             @QueryParam("status") String status,
-            @QueryParam("group") String group) {
-        return incidents.list(jvms.resolve(namespace, pod, container, cluster, start), level, status, group);
+            @QueryParam("group") String group,
+            @QueryParam("last") String last,
+            @QueryParam("from") String from,
+            @QueryParam("to") String to) {
+        return incidents.list(
+                jvms.resolve(namespace, pod, container, cluster, start), level, status, group, last, from, to);
     }
 
     @GET

@@ -101,16 +101,27 @@ public class FrameService {
             String state,
             String endpoint,
             String focus,
+            Integer top,
             String last,
             String from,
             String to,
-            String vsFrom,
-            String vsTo) {
+            String vs) {
         FrameKindSpec spec = requireKind(jvm, kind);
         rejectState(spec.kind(), state);
         if (endpoint != null && !endpoint.isBlank() && jvm.jdkMajor() < 25) {
             throw V2Exception.notOnJdk("needs JDK 25");
         }
+        String vsFrom = null;
+        String vsTo = null;
+        if (vs != null && !vs.isBlank()) {
+            int slash = vs.indexOf('/');
+            if (slash <= 0 || slash == vs.length() - 1) {
+                throw V2Exception.badRange("vs is <from>/<to>");
+            }
+            vsFrom = vs.substring(0, slash);
+            vsTo = vs.substring(slash + 1);
+        }
+        int cap = top == null ? TOP_FRAMES : Math.min(TOP_FRAMES, Math.max(1, top));
         V2Range range = range(jvm, last, from, to);
         try {
             List<Weighted> stacks = stacks(jvm, spec.kind(), range, thread, state, blank(endpoint));
@@ -121,10 +132,7 @@ public class FrameService {
             }
             List<FrameRow> rows = rank(stacks);
             Boolean significant = null;
-            if (vsFrom != null || vsTo != null) {
-                if (vsFrom == null || vsTo == null) {
-                    throw V2Exception.badRange("vs_from and vs_to are set together");
-                }
+            if (vsFrom != null) {
                 V2Range other = V2Range.parse(null, vsFrom, vsTo, Instant.ofEpochMilli(jvm.lastMs()));
                 List<Weighted> otherStacks = stacks(jvm, spec.kind(), other, thread, state, blank(endpoint));
                 long otherN = otherStacks.stream().mapToLong(stack -> stack.count).sum();
@@ -136,6 +144,9 @@ public class FrameService {
                         flags.add("low_confidence");
                     }
                 }
+            }
+            if (rows.size() > cap) {
+                rows = rows.subList(0, cap);
             }
             return new TopFrames(spec.kind(), window(range), n, flags, rows, List.of(), significant);
         } catch (IOException error) {
@@ -176,9 +187,21 @@ public class FrameService {
             long otherCount = match == null ? 0L : match.count();
             boolean sig = significant(
                     nLeft, nLeft == 0 ? 0d : row.count() / (double) nLeft, nRight, nRight == 0 ? 0d : otherCount / (double) nRight);
+            double shareA = row.sharePct();
+            double shareB = otherShare;
             compared.add(new FrameRow(
-                    row.frame(), row.category(), row.sharePct(), row.appCaller(), row.count(), otherShare, sig));
+                    row.frame(),
+                    row.category(),
+                    shareA,
+                    row.appCaller(),
+                    row.count(),
+                    otherShare,
+                    sig,
+                    shareA,
+                    shareB,
+                    shareA - shareB));
         }
+        compared.sort(Comparator.comparingDouble((FrameRow row) -> Math.abs(row.delta() == null ? 0d : row.delta())).reversed());
         return compared;
     }
 
@@ -209,7 +232,7 @@ public class FrameService {
             }
             Acc acc = byName.get(name);
             double share = grand == 0d ? 0d : 100d * acc.weight / grand;
-            rows.add(new FrameRow(name, acc.category, share, acc.appCaller, acc.count, null, null));
+            rows.add(new FrameRow(name, acc.category, share, acc.appCaller, acc.count, null, null, null, null, null));
         }
         ranked.clear();
         return rows;
@@ -427,7 +450,10 @@ public class FrameService {
             String appCaller,
             long count,
             Double vsSharePct,
-            Boolean significant) {}
+            Boolean significant,
+            Double shareA,
+            Double shareB,
+            Double delta) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)

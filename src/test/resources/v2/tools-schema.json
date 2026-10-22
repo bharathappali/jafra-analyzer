@@ -1,0 +1,351 @@
+{
+  "tools" : [ {
+    "name" : "get_overview",
+    "description" : "18 group lanes for the range",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "from" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "to" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "last" : {
+          "type" : "string",
+          "description" : "90s, 5m, 15m, 1h, 1d …, max 7d; not with from/to; default: context range"
+        }
+      },
+      "required" : [ ],
+      "additionalProperties" : false
+    }
+  }, {
+    "name" : "list_incidents",
+    "description" : "Incidents overlapping the range, capped at 20",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "from" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "to" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "last" : {
+          "type" : "string",
+          "description" : "90s, 5m, 15m, 1h, 1d …, max 7d; not with from/to; default: context range"
+        },
+        "group" : {
+          "type" : "string",
+          "enum" : [ "cpu", "heap", "gc", "metaspace", "codecache", "nmt", "container", "threads", "locks", "vt", "safepoint", "jit", "classes", "socket", "file", "exceptions", "alloc", "endpoint" ]
+        },
+        "status" : {
+          "type" : "string",
+          "default" : "all",
+          "enum" : [ "open", "closed", "all" ]
+        },
+        "level" : {
+          "type" : "string",
+          "enum" : [ "critical", "warning" ]
+        }
+      },
+      "required" : [ ],
+      "additionalProperties" : false
+    }
+  }, {
+    "name" : "get_incident",
+    "description" : "One incident",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "id" : {
+          "type" : "string",
+          "description" : "id"
+        }
+      },
+      "required" : [ "id" ],
+      "additionalProperties" : false
+    }
+  }, {
+    "name" : "query_metric",
+    "description" : "One metric. At most 10 breakdown rows and 60 points",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "from" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "to" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "last" : {
+          "type" : "string",
+          "description" : "90s, 5m, 15m, 1h, 1d …, max 7d; not with from/to; default: context range"
+        },
+        "metric" : {
+          "type" : "string",
+          "description" : "catalogue name"
+        },
+        "stat" : {
+          "type" : "string",
+          "default" : "avg",
+          "enum" : [ "avg", "min", "max", "sum", "count", "rate", "p50", "p95", "p99" ]
+        },
+        "step" : {
+          "type" : "string",
+          "description" : "e.g. 5s, 1m, 5m; coarsened to keep ≤ 60 points"
+        },
+        "by" : {
+          "type" : "string",
+          "description" : "by"
+        },
+        "where" : {
+          "type" : "string",
+          "description" : "by_name=value"
+        },
+        "top" : {
+          "type" : "integer",
+          "minimum" : 1,
+          "maximum" : 10,
+          "default" : 10
+        }
+      },
+      "required" : [ "metric" ],
+      "additionalProperties" : false
+    }
+  }, {
+    "name" : "get_trend",
+    "description" : "Theil-Sen trend. Default last 60m",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "from" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "to" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "last" : {
+          "type" : "string",
+          "description" : "90s, 5m, 15m, 1h, 1d …, max 7d; not with from/to; default: context range"
+        },
+        "metric" : {
+          "type" : "string",
+          "enum" : [ "cpu.used.cores", "heap.used.bytes", "metaspace.used.bytes", "codecache.used.bytes", "nmt.committed.bytes", "nmt.direct.used.bytes", "container.usage.bytes", "threads.live.count", "classes.net.count" ]
+        }
+      },
+      "required" : [ "metric" ],
+      "additionalProperties" : false
+    }
+  }, {
+    "name" : "list_events",
+    "description" : "One event type, cap 20",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "from" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "to" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "last" : {
+          "type" : "string",
+          "description" : "90s, 5m, 15m, 1h, 1d …, max 7d; not with from/to; default: context range"
+        },
+        "type" : {
+          "type" : "string",
+          "enum" : [ "gc.pause", "safepoint", "endpoint.slow", "error", "vt.pinned", "vt.submit_failed", "tls.handshake", "socket.slow", "file.slow", "jit.compile", "jit.deopt", "jit.compile_failed", "codecache.full", "metaspace.threshold", "metaspace.alloc_failure", "oom", "gc.evac_failed", "gc.promotion_failed", "gc.system_gc" ]
+        },
+        "sort" : {
+          "type" : "string",
+          "default" : "duration",
+          "enum" : [ "duration", "time" ]
+        },
+        "limit" : {
+          "type" : "integer",
+          "minimum" : 1,
+          "maximum" : 20,
+          "default" : 20
+        },
+        "where" : {
+          "type" : "string",
+          "description" : "field=value"
+        }
+      },
+      "required" : [ "type" ],
+      "additionalProperties" : false
+    }
+  }, {
+    "name" : "top_frames",
+    "description" : "Top frames, cap 15",
+    "parameters" : {
+      "type" : "object",
+      "properties" : {
+        "from" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "to" : {
+          "type" : "string",
+          "description" : "epoch ms or RFC 3339 UTC"
+        },
+        "last" : {
+          "type" : "string",
+          "description" : "90s, 5m, 15m, 1h, 1d …, max 7d; not with from/to; default: context range"
+        },
+        "kind" : {
+          "type" : "string",
+          "enum" : [ "cpu", "alloc", "lock", "wall", "socket" ]
+        },
+        "thread" : {
+          "type" : "string",
+          "description" : "name prefix"
+        },
+        "endpoint" : {
+          "type" : "string",
+          "description" : "handler, JDK 25, cpu|wall"
+        },
+        "state" : {
+          "type" : "string",
+          "enum" : [ "running", "waiting" ]
+        },
+        "top" : {
+          "type" : "integer",
+          "minimum" : 1,
+          "maximum" : 15,
+          "default" : 15
+        },
+        "focus" : {
+          "type" : "string",
+          "description" : "frame"
+        },
+        "vs" : {
+          "type" : "string",
+          "description" : "<from>/<to>"
+        }
+      },
+      "required" : [ "kind" ],
+      "additionalProperties" : false
+    }
+  }, {
+    "name" : "get_jvm_info",
+    "description" : "JVM settings recorded from the chunk",
+    "parameters" : {
+      "type" : "object",
+      "properties" : { },
+      "required" : [ ],
+      "additionalProperties" : false
+    }
+  } ],
+  "context" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : {
+      "jvm" : {
+        "type" : "object",
+        "additionalProperties" : false,
+        "properties" : {
+          "ns" : {
+            "type" : "string"
+          },
+          "pod" : {
+            "type" : "string"
+          },
+          "container" : {
+            "type" : "string"
+          },
+          "start" : {
+            "type" : "string"
+          },
+          "jdk" : {
+            "type" : "integer"
+          }
+        }
+      },
+      "range" : {
+        "type" : "object",
+        "additionalProperties" : false,
+        "properties" : {
+          "from" : {
+            "type" : "string"
+          },
+          "to" : {
+            "type" : "string"
+          }
+        }
+      },
+      "chart" : {
+        "type" : [ "object", "null" ],
+        "additionalProperties" : false,
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "view" : {
+            "type" : "string"
+          },
+          "metrics" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "events" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "frames" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "selection" : {
+        "type" : [ "object", "null" ],
+        "additionalProperties" : true,
+        "properties" : {
+          "kind" : {
+            "type" : "string",
+            "enum" : [ "point", "range", "bar", "cell", "frame", "incident", "chart" ]
+          }
+        }
+      },
+      "summary" : {
+        "type" : "string"
+      },
+      "open_incidents" : {
+        "type" : "array",
+        "items" : {
+          "type" : "object",
+          "additionalProperties" : false,
+          "properties" : {
+            "id" : {
+              "type" : "string"
+            },
+            "headline" : {
+              "type" : "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

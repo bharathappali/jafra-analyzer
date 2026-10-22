@@ -77,8 +77,8 @@ class SurfaceResourceTest {
                 .get("/v2/jvms/v2surf/" + pod + "/app/timeline")
                 .then()
                 .statusCode(200)
-                .body("points.size()", org.hamcrest.Matchers.lessThanOrEqualTo(360))
-                .body("points[0].t", org.hamcrest.Matchers.instanceOf(Number.class));
+                .body("lanes", hasSize(18))
+                .body("lanes[0].segments", hasSize(1));
 
         given()
                 .queryParam("cluster", "cluster-a")

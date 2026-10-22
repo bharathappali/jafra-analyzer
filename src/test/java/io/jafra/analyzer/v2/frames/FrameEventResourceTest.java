@@ -123,13 +123,14 @@ class FrameEventResourceTest {
                 .queryParam("kind", "cpu")
                 .queryParam("from", "0")
                 .queryParam("to", "5000")
-                .queryParam("vs_from", "5000")
-                .queryParam("vs_to", "10000")
+                .queryParam("vs", "5000/10000")
                 .get(base + "/frames")
                 .then()
                 .statusCode(200)
                 .body("frames.find { it.frame == '" + leaf + "' }.significant", equalTo(true))
-                .body("frames.find { it.frame == '" + leaf + "' }.vs_share_pct", equalTo(0f));
+                .body("frames.find { it.frame == '" + leaf + "' }.vs_share_pct", equalTo(0f))
+                .body("frames.find { it.frame == '" + leaf + "' }.share_b", equalTo(0f))
+                .body("frames.find { it.frame == '" + leaf + "' }.delta", org.hamcrest.Matchers.notNullValue());
 
         given()
                 .queryParam("type", "error")
@@ -141,6 +142,15 @@ class FrameEventResourceTest {
                 .then()
                 .statusCode(200)
                 .body("events", hasSize(1))
+                .body("events[0].duration_us", equalTo(50));
+
+        given()
+                .queryParam("type", "error")
+                .queryParam("from", "0")
+                .queryParam("to", "5000")
+                .get(base + "/events")
+                .then()
+                .statusCode(200)
                 .body("events[0].duration_us", equalTo(50));
 
         given()
