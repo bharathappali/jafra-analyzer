@@ -170,14 +170,28 @@ public class ChunkStore {
     }
 
     public void repairMissingSidecars() {
+        if (!ready) {
+            LOG.debugf("skipping sidecar repair until storage is ready");
+            return;
+        }
         try {
             for (ChunkIndexRow row : index.storedRows()) {
-                if (row.path() == null || row.path().isBlank()) {
-                    continue;
-                }
-                Path sidecar = ChunkSidecar.beside(recordedPayload(row));
-                if (!Files.isRegularFile(sidecar)) {
-                    ChunkSidecar.write(sidecar, ChunkSidecar.fromRow(row));
+                synchronized (SidecarLocks.of(row.chunkId())) {
+                    ChunkIndexRow current = index.get(row.chunkId());
+                    if (current == null || !ChunkIndexRow.STATUS_STORED.equals(current.status())) {
+                        continue;
+                    }
+                    if (current.path() == null || current.path().isBlank()) {
+                        continue;
+                    }
+                    Path payload = recordedPayload(current);
+                    if (!Files.isRegularFile(payload)) {
+                        continue;
+                    }
+                    Path sidecar = ChunkSidecar.beside(payload);
+                    if (!Files.isRegularFile(sidecar)) {
+                        ChunkSidecar.write(sidecar, ChunkSidecar.fromRow(current));
+                    }
                 }
             }
         } catch (IOException error) {
@@ -574,15 +588,21 @@ public class ChunkStore {
     private void finishDeleting() throws IOException {
         Path recordings = root.resolve("data").resolve("recordings");
         for (ChunkIndexRow row : index.deletingRows()) {
-            if (row.path() != null && !row.path().isBlank()) {
-                Path payload = recordings.resolve(row.path());
-                deleteQuietly(payload);
-                String name = payload.getFileName().toString();
-                String stem = name.endsWith(".jfr") ? name.substring(0, name.length() - 4) : name;
-                deleteQuietly(payload.resolveSibling(stem + ".json"));
-                pruneEmptyDirectories(payload.getParent());
+            synchronized (SidecarLocks.of(row.chunkId())) {
+                ChunkIndexRow current = index.get(row.chunkId());
+                if (current == null || !ChunkIndexRow.STATUS_DELETING.equals(current.status())) {
+                    continue;
+                }
+                if (current.path() != null && !current.path().isBlank()) {
+                    Path payload = recordings.resolve(current.path());
+                    deleteQuietly(payload);
+                    String name = payload.getFileName().toString();
+                    String stem = name.endsWith(".jfr") ? name.substring(0, name.length() - 4) : name;
+                    deleteQuietly(payload.resolveSibling(stem + ".json"));
+                    pruneEmptyDirectories(payload.getParent());
+                }
+                index.delete(current.chunkId());
             }
-            index.delete(row.chunkId());
         }
     }
 
@@ -619,10 +639,14 @@ public class ChunkStore {
             return;
         }
         try (Stream<Path> files = Files.walk(dir)) {
-            for (Path file : files.filter(path -> path.getFileName().toString().endsWith(".json.tmp")).toList()) {
+            for (Path file : files.filter(path -> isJsonTmp(path.getFileName().toString())).toList()) {
                 deleteQuietly(file);
             }
         }
+    }
+
+    private static boolean isJsonTmp(String name) {
+        return name.endsWith(".json.tmp") || name.contains(".json.tmp.");
     }
 
     private static void deleteParts(Path dir) throws IOException {

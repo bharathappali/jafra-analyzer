@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.UUID;
 
 /** Durable file replace and move. Parent-directory fsync is skipped when the filesystem cannot do it. */
 public final class DurableFiles {
@@ -15,16 +16,16 @@ public final class DurableFiles {
 
     public static void writeAtomic(Path target, byte[] bytes) throws IOException {
         Files.createDirectories(target.getParent());
-        Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
-        try (FileChannel channel = FileChannel.open(
-                tmp,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.WRITE,
-                StandardOpenOption.TRUNCATE_EXISTING)) {
-            channel.write(ByteBuffer.wrap(bytes));
-            channel.force(true);
-        }
+        Path tmp = target.resolveSibling(target.getFileName() + ".tmp." + UUID.randomUUID());
         try {
+            try (FileChannel channel = FileChannel.open(
+                    tmp,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING)) {
+                channel.write(ByteBuffer.wrap(bytes));
+                channel.force(true);
+            }
             moveReplacing(tmp, target);
         } catch (IOException error) {
             Files.deleteIfExists(tmp);

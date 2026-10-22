@@ -25,6 +25,7 @@ import io.jafra.analyzer.storage.ChunkStore;
 import io.jafra.analyzer.storage.DurableFiles;
 import io.jafra.analyzer.storage.InvalidIdentityException;
 import io.jafra.analyzer.storage.JfrHeaderTimes;
+import io.jafra.analyzer.storage.SidecarLocks;
 
 /**
  * One-way move from the v0.0.1, v0.0.2, and dev bucket layouts into data/recordings.
@@ -219,7 +220,7 @@ public final class LegacyMigrator {
         }
         if (targetFile && Files.size(target) == existing.chunkLength()) {
             if (!Files.isRegularFile(sidecar)) {
-                writeSidecar(sidecar, existing, filled);
+                writeSidecar(index, sidecar, existing, filled);
             }
             if (!ChunkIndexRow.STATUS_STORED.equals(existing.status())) {
                 index.markStored(existing.chunkId());
@@ -249,7 +250,7 @@ public final class LegacyMigrator {
         Files.createDirectories(target.getParent());
         Path sidecar = ChunkPaths.sidecar(root, filled);
         if (!Files.isRegularFile(sidecar)) {
-            writeSidecar(sidecar, row, filled);
+            writeSidecar(index, sidecar, row, filled);
         }
         checkpoint.reach("after-json:" + filled.chunkId());
         if (!Files.isRegularFile(target)) {
@@ -267,16 +268,22 @@ public final class LegacyMigrator {
         ChunkStore.deleteQuietly(meta);
     }
 
-    private static void writeSidecar(Path sidecar, ChunkIndexRow row, ChunkMetadata filled) throws IOException {
-        ChunkSidecar.Document document = ChunkSidecar.from(
-                filled,
-                row.nodeName(),
-                row.fileSequence(),
-                row.chunkSequence(),
-                row.jvmInstance(),
-                row.minEventStartNs(),
-                row.maxEventEndNs());
-        ChunkSidecar.write(sidecar, document);
+    private static void writeSidecar(IndexStore index, Path sidecar, ChunkIndexRow row, ChunkMetadata filled)
+            throws IOException {
+        synchronized (SidecarLocks.of(filled.chunkId())) {
+            ChunkIndexRow current = index.get(filled.chunkId());
+            ChunkIndexRow source = current == null ? row : current;
+            ChunkSidecar.write(
+                    sidecar,
+                    ChunkSidecar.from(
+                            filled,
+                            source.nodeName(),
+                            source.fileSequence(),
+                            source.chunkSequence(),
+                            source.jvmInstance(),
+                            source.minEventStartNs(),
+                            source.maxEventEndNs()));
+        }
     }
 
     private static ChunkMetadata fill(ChunkMetadata metadata, Path payload, Map<String, String> podNames) {

@@ -84,16 +84,22 @@ class StorageDurabilityTest {
     @Test
     void startupDeletesLeftoverJsonTmpFiles(@TempDir Path root) throws Exception {
         Path recordingTmp = root.resolve("data/recordings/ns/foo.json.tmp");
+        Path recordingUuid = root.resolve("data/recordings/ns/foo.json.tmp.11111111-1111-1111-1111-111111111111");
         Path quarantineTmp = root.resolve("data/quarantine/bar.json.tmp");
+        Path quarantineUuid = root.resolve("data/quarantine/bar.json.tmp.22222222-2222-2222-2222-222222222222");
         Files.createDirectories(recordingTmp.getParent());
         Files.createDirectories(quarantineTmp.getParent());
         Files.write(recordingTmp, new byte[] {1});
+        Files.write(recordingUuid, new byte[] {3});
         Files.write(quarantineTmp, new byte[] {2});
+        Files.write(quarantineUuid, new byte[] {4});
         ChunkStore store = new ChunkStore(root);
         try {
             store.recover();
             assertFalse(Files.exists(recordingTmp));
+            assertFalse(Files.exists(recordingUuid));
             assertFalse(Files.exists(quarantineTmp));
+            assertFalse(Files.exists(quarantineUuid));
         } finally {
             store.close();
         }
