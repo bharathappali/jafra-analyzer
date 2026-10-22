@@ -1733,8 +1733,8 @@
     25
    ],
    "source": {
-    "event": "jdk.OldGarbageCollection",
-    "field": "gcId",
+    "event": "jdk.GarbageCollection",
+    "field": "name",
     "producer": "jdk",
     "period_or_threshold": {
      "aggressive": {
@@ -1748,31 +1748,15 @@
      }
     }
    },
-   "inputs": [
-    {
-     "event": "jdk.G1GarbageCollection",
-     "field": "type",
-     "producer": "jdk",
-     "period_or_threshold": {
-      "aggressive": {
-       "threshold": "0 ms"
-      },
-      "medium": {
-       "threshold": "0 ms"
-      },
-      "low": {
-       "threshold": "0 ms"
-      }
-     }
-    }
-   ],
-   "derivation": "full/old GCs; on G1 only G1GarbageCollection.type=Full",
+   "inputs": [],
+   "derivation": "count of jdk.GarbageCollection events whose name is a full collector: G1Full, SerialOld or ParallelOld (configurable list). Never count jdk.OldGarbageCollection (on G1 it fires as G1Old for every concurrent cycle) and never rely on G1GarbageCollection.type (it has no Full value). Other collectors give 0.",
    "flags": [],
    "charts": [
     "gc-pauses",
     "compaction"
    ],
-   "overview_key": false
+   "overview_key": false,
+   "note": "G1Full naming verified on JDK 21.0.12 recordings; JDK 17 and 25 still to check."
   },
   {
    "name": "gc.cpu.pct",
