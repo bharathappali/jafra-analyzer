@@ -131,8 +131,8 @@ public class IndexStore {
     }
 
     /**
-     * Widens the event window. A later start or an earlier end leaves the stored bounds in place.
-     * Also stamps decoded_at.
+     * Widens the event window of a stored chunk. A later start or an earlier end leaves the stored
+     * bounds in place. Also stamps decoded_at. Rows that are not {@code stored} are left unchanged.
      */
     public synchronized void updateEventRange(String chunkId, long minStartNs, long maxEndNs) throws IOException {
         try (PreparedStatement statement = connection.prepareStatement("""
@@ -140,7 +140,7 @@ public class IndexStore {
                 SET min_event_start_ns = LEAST(min_event_start_ns, ?),
                     max_event_end_ns = GREATEST(max_event_end_ns, ?),
                     decoded_at = CURRENT_TIMESTAMP
-                WHERE chunk_id = ?
+                WHERE chunk_id = ? AND status = 'stored'
                 """)) {
             statement.setLong(1, minStartNs);
             statement.setLong(2, maxEndNs);

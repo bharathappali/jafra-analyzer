@@ -79,9 +79,15 @@ public final class ChunkSidecar {
                 row.maxEventEndNs());
     }
 
-    /** Rewrites the sidecar so its event window matches the index row. */
+    /**
+     * Rewrites an existing sidecar so its event window matches the index row. A missing sidecar is
+     * left absent; creating one is the repair thread's job.
+     */
     public static void syncEventRange(Path sidecar, ChunkIndexRow row) throws IOException {
-        Document document = Files.isRegularFile(sidecar) ? read(sidecar) : fromRow(row);
+        if (!Files.isRegularFile(sidecar)) {
+            return;
+        }
+        Document document = read(sidecar);
         document.minEventStartNs = row.minEventStartNs();
         document.maxEventEndNs = row.maxEventEndNs();
         if (document.jvmInstance == null || document.jvmInstance.isBlank()) {

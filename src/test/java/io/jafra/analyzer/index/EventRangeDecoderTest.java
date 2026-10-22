@@ -1,19 +1,26 @@
 package io.jafra.analyzer.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import io.jafra.analyzer.storage.ChunkMetadata;
+import io.jafra.analyzer.storage.ChunkPaths;
 import io.jafra.analyzer.storage.ChunkStore;
+import io.jafra.analyzer.storage.RetentionJob;
 import jdk.jfr.Label;
 import jdk.jfr.Name;
 import jdk.jfr.Recording;
@@ -111,10 +118,16 @@ class EventRangeDecoderTest {
         IndexStore index = new IndexStore(root);
         EventRangeDecoder decoder = new EventRangeDecoder(index, root, 1);
         try {
+            byte[] payload = dumpMarker();
+            Path recordings = root.resolve("data/recordings");
             for (int i = 0; i < 1000; i++) {
                 String chunkId = "backlog-" + i;
-                assertTrue(index.insertPending(undecoded(chunkId)));
+                ChunkIndexRow row = undecoded(chunkId);
+                assertTrue(index.insertPending(row));
                 index.markStored(chunkId);
+                Path file = recordings.resolve(row.path());
+                Files.createDirectories(file.getParent());
+                Files.write(file, payload);
             }
             for (int attempt = 0; attempt < 8 && !index.undecodedChunkIds(2000).isEmpty(); attempt++) {
                 decoder.rescan();
@@ -124,6 +137,84 @@ class EventRangeDecoderTest {
         } finally {
             decoder.close();
             index.close();
+        }
+    }
+
+    @Test
+    void retentionDuringDecodeDoesNotResurrectTheChunk(@TempDir Path root) throws Exception {
+        IndexStore index = new IndexStore(root);
+        ChunkStore store = new ChunkStore(root, index);
+        EventRangeDecoder decoder = new EventRangeDecoder(index, root, 1);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        EventRangeDecoder.beforeCommit = () -> {
+            entered.countDown();
+            try {
+                if (!release.await(30, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("decode was not released");
+                }
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(error);
+            }
+        };
+        try {
+            store.recover();
+            byte[] payload = dumpMarker();
+            ChunkMetadata metadata = new ChunkMetadata(
+                    "doomed",
+                    "rec",
+                    "default",
+                    "ns",
+                    "pod-uid",
+                    "payments-api",
+                    "app",
+                    "profile.jfr",
+                    0,
+                    payload.length,
+                    "checksum",
+                    1_000,
+                    50);
+            ChunkStore.IncomingWrite write = store.beginWrite("doomed");
+            write.write(payload);
+            store.commit(write, metadata);
+            Path jfr = ChunkPaths.payload(root, metadata);
+            Path json = ChunkPaths.sidecar(root, metadata);
+            assertTrue(Files.isRegularFile(jfr));
+            assertTrue(Files.isRegularFile(json));
+
+            Thread worker = new Thread(() -> decoder.decode("doomed"), "decode-doomed");
+            worker.start();
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            new RetentionJob(store, Optional.of(Duration.ofHours(1))).purge(Duration.ofHours(1));
+            release.countDown();
+            worker.join(10_000);
+
+            assertNull(index.get("doomed"));
+            assertFalse(Files.exists(jfr));
+            assertFalse(Files.exists(json));
+        } finally {
+            EventRangeDecoder.beforeCommit = () -> {};
+            release.countDown();
+            decoder.close();
+            store.close();
+            index.close();
+        }
+    }
+
+    private static byte[] dumpMarker() throws Exception {
+        Path dump = Files.createTempFile("jafra-doomed", ".jfr");
+        try (Recording recording = new Recording()) {
+            recording.enable(RangeMarker.class);
+            recording.start();
+            RangeMarker marker = new RangeMarker();
+            marker.token = "doomed";
+            marker.commit();
+            recording.stop();
+            recording.dump(dump);
+            return Files.readAllBytes(dump);
+        } finally {
+            Files.deleteIfExists(dump);
         }
     }
 

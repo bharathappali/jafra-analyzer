@@ -20,6 +20,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import io.jafra.analyzer.storage.ChunkSidecar;
+import io.jafra.analyzer.storage.SidecarLocks;
 import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
 
@@ -37,6 +38,9 @@ public class EventRangeDecoder {
     private final Path recordingsDir;
     private final ThreadPoolExecutor executor;
     private final Set<String> inflight = ConcurrentHashMap.newKeySet();
+
+    /** Runs after the chunk file is read and before the index or sidecar is updated. Tests use this to overlap retention. */
+    static volatile Runnable beforeCommit = () -> {};
 
     @Inject
     public EventRangeDecoder(
@@ -104,65 +108,126 @@ public class EventRangeDecoder {
     }
 
     public void decode(String chunkId) {
+        ReadResult result;
         try {
-            ChunkIndexRow row = index.get(chunkId);
-            if (row == null || row.path() == null || row.path().isBlank()) {
-                return;
-            }
-            Path file = recordingsDir.resolve(row.path());
-            if (!Files.isRegularFile(file)) {
-                index.markDecoded(chunkId);
-                return;
-            }
-            long min = Long.MAX_VALUE;
-            long max = Long.MIN_VALUE;
-            boolean any = false;
-            try (RecordingFile recording = new RecordingFile(file)) {
-                while (recording.hasMoreEvents()) {
-                    RecordedEvent event = recording.readEvent();
-                    if (event == null || event.getStartTime() == null) {
-                        continue;
-                    }
-                    long start = epochNanos(event.getStartTime());
-                    long end = start;
-                    Duration duration = event.getDuration();
-                    if (duration != null && !duration.isNegative() && !duration.isZero()) {
-                        try {
-                            end = Math.addExact(start, duration.toNanos());
-                        } catch (ArithmeticException overflow) {
-                            end = start;
-                        }
-                    }
-                    any = true;
-                    min = Math.min(min, start);
-                    max = Math.max(max, end);
-                }
-            }
-            if (any) {
-                index.updateEventRange(chunkId, min, max);
-                syncSidecar(chunkId);
-            } else {
-                index.markDecoded(chunkId);
-            }
+            result = readEvents(chunkId);
         } catch (RuntimeException | IOException error) {
             LOG.warnf(error, "unable to decode event range for %s", chunkId);
+            result = ReadResult.FAILED;
+        }
+        if (result.kind == Kind.ABSENT) {
+            return;
+        }
+        beforeCommit.run();
+        synchronized (SidecarLocks.of(chunkId)) {
             try {
-                index.markDecoded(chunkId);
-            } catch (IOException ignored) {
-                LOG.warnf(ignored, "unable to mark %s decoded", chunkId);
+                commit(chunkId, result);
+            } catch (RuntimeException | IOException error) {
+                LOG.warnf(error, "unable to record event range for %s", chunkId);
             }
         }
     }
 
-    private void syncSidecar(String chunkId) {
-        try {
-            ChunkIndexRow updated = index.get(chunkId);
-            if (updated == null || updated.path() == null || updated.path().isBlank()) {
+    private ReadResult readEvents(String chunkId) throws IOException {
+        ChunkIndexRow row = index.get(chunkId);
+        if (row == null || row.path() == null || row.path().isBlank()) {
+            return ReadResult.ABSENT;
+        }
+        Path file = recordingsDir.resolve(row.path());
+        if (!Files.isRegularFile(file)) {
+            return ReadResult.MISSING;
+        }
+        long min = Long.MAX_VALUE;
+        long max = Long.MIN_VALUE;
+        boolean any = false;
+        try (RecordingFile recording = new RecordingFile(file)) {
+            while (recording.hasMoreEvents()) {
+                RecordedEvent event = recording.readEvent();
+                if (event == null || event.getStartTime() == null) {
+                    continue;
+                }
+                long start = epochNanos(event.getStartTime());
+                long end = start;
+                Duration duration = event.getDuration();
+                if (duration != null && !duration.isNegative() && !duration.isZero()) {
+                    try {
+                        end = Math.addExact(start, duration.toNanos());
+                    } catch (ArithmeticException overflow) {
+                        end = start;
+                    }
+                }
+                any = true;
+                min = Math.min(min, start);
+                max = Math.max(max, end);
+            }
+        }
+        return any ? new ReadResult(Kind.RANGE, min, max) : ReadResult.EMPTY;
+    }
+
+    /**
+     * Re-reads the row under the per-chunk lock. Updates the index and an existing sidecar only
+     * while the chunk is still stored and its payload is still on disk.
+     */
+    private void commit(String chunkId, ReadResult result) throws IOException {
+        ChunkIndexRow row = storedPayload(chunkId);
+        if (row == null) {
+            return;
+        }
+        if (result.kind == Kind.RANGE) {
+            index.updateEventRange(chunkId, result.min, result.max);
+            row = storedPayload(chunkId);
+            if (row == null) {
                 return;
             }
-            ChunkSidecar.syncEventRange(ChunkSidecar.beside(recordingsDir.resolve(updated.path())), updated);
-        } catch (IOException error) {
-            LOG.warnf(error, "unable to update sidecar for %s", chunkId);
+            Path sidecar = ChunkSidecar.beside(recordingsDir.resolve(row.path()));
+            if (!Files.isRegularFile(sidecar)) {
+                return;
+            }
+            ChunkSidecar.syncEventRange(sidecar, row);
+            return;
+        }
+        if (result.kind == Kind.EMPTY || result.kind == Kind.FAILED) {
+            index.markDecoded(chunkId);
+        }
+    }
+
+    /** The stored row when its payload file is still present. */
+    private ChunkIndexRow storedPayload(String chunkId) throws IOException {
+        ChunkIndexRow row = index.get(chunkId);
+        if (row == null || !ChunkIndexRow.STATUS_STORED.equals(row.status())) {
+            return null;
+        }
+        if (row.path() == null || row.path().isBlank()) {
+            return null;
+        }
+        if (!Files.isRegularFile(recordingsDir.resolve(row.path()))) {
+            return null;
+        }
+        return row;
+    }
+
+    private enum Kind {
+        ABSENT,
+        MISSING,
+        FAILED,
+        EMPTY,
+        RANGE
+    }
+
+    private static final class ReadResult {
+        static final ReadResult ABSENT = new ReadResult(Kind.ABSENT, 0, 0);
+        static final ReadResult MISSING = new ReadResult(Kind.MISSING, 0, 0);
+        static final ReadResult FAILED = new ReadResult(Kind.FAILED, 0, 0);
+        static final ReadResult EMPTY = new ReadResult(Kind.EMPTY, 0, 0);
+
+        final Kind kind;
+        final long min;
+        final long max;
+
+        ReadResult(Kind kind, long min, long max) {
+            this.kind = kind;
+            this.min = min;
+            this.max = max;
         }
     }
 
