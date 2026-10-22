@@ -1,11 +1,13 @@
 package io.jafra.analyzer.index;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -102,6 +104,54 @@ class EventRangeDecoderTest {
             store.close();
             index.close();
         }
+    }
+
+    @Test
+    void rescanDrainsABacklogLargerThanTheQueue(@TempDir Path root) throws Exception {
+        IndexStore index = new IndexStore(root);
+        EventRangeDecoder decoder = new EventRangeDecoder(index, root, 1);
+        try {
+            for (int i = 0; i < 1000; i++) {
+                String chunkId = "backlog-" + i;
+                assertTrue(index.insertPending(undecoded(chunkId)));
+                index.markStored(chunkId);
+            }
+            for (int attempt = 0; attempt < 8 && !index.undecodedChunkIds(2000).isEmpty(); attempt++) {
+                decoder.rescan();
+                decoder.awaitIdle(Duration.ofSeconds(30));
+            }
+            assertEquals(List.of(), index.undecodedChunkIds(2000));
+        } finally {
+            decoder.close();
+            index.close();
+        }
+    }
+
+    private static ChunkIndexRow undecoded(String chunkId) {
+        return new ChunkIndexRow(
+                chunkId,
+                "rec",
+                "default",
+                null,
+                "ns",
+                "pod",
+                "uid",
+                "app",
+                "default",
+                "profile.jfr",
+                null,
+                null,
+                0L,
+                4,
+                100,
+                200,
+                100,
+                200,
+                "checksum",
+                "default/ns/pod/app/chunks/uid/default/" + chunkId + ".jfr",
+                ChunkIndexRow.STATUS_PENDING,
+                null,
+                null);
     }
 
     private static ChunkIndexRow awaitDecoded(IndexStore index, String chunkId) throws Exception {

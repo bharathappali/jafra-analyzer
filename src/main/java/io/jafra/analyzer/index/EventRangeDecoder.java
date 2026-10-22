@@ -5,7 +5,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -17,6 +19,7 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import io.jafra.analyzer.storage.ChunkSidecar;
 import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
 
@@ -33,6 +36,7 @@ public class EventRangeDecoder {
     private final IndexStore index;
     private final Path recordingsDir;
     private final ThreadPoolExecutor executor;
+    private final Set<String> inflight = ConcurrentHashMap.newKeySet();
 
     @Inject
     public EventRangeDecoder(
@@ -57,17 +61,45 @@ public class EventRangeDecoder {
                     thread.setDaemon(true);
                     return thread;
                 },
-                (runnable, pool) -> LOG.warnf("decode queue full, skipping a chunk"));
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     public void offer(String chunkId) {
-        if (chunkId == null || chunkId.isBlank()) {
+        if (chunkId == null || chunkId.isBlank() || !inflight.add(chunkId)) {
             return;
         }
         try {
-            executor.execute(() -> decode(chunkId));
+            executor.execute(() -> {
+                try {
+                    decode(chunkId);
+                } finally {
+                    inflight.remove(chunkId);
+                }
+            });
         } catch (RejectedExecutionException error) {
+            inflight.remove(chunkId);
             LOG.warnf("decode queue full, skipping %s", chunkId);
+        }
+    }
+
+    /** Offers the next batch of stored chunks that still have no decoded_at. */
+    public void rescan() {
+        try {
+            for (String chunkId : index.undecodedChunkIds(QUEUE_CAPACITY)) {
+                offer(chunkId);
+            }
+        } catch (IOException error) {
+            LOG.warnf(error, "decode rescan failed");
+        }
+    }
+
+    public void awaitIdle(Duration timeout) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (inflight.isEmpty() && executor.getActiveCount() == 0 && executor.getQueue().isEmpty()) {
+                return;
+            }
+            Thread.sleep(10);
         }
     }
 
@@ -108,6 +140,7 @@ public class EventRangeDecoder {
             }
             if (any) {
                 index.updateEventRange(chunkId, min, max);
+                syncSidecar(chunkId);
             } else {
                 index.markDecoded(chunkId);
             }
@@ -118,6 +151,18 @@ public class EventRangeDecoder {
             } catch (IOException ignored) {
                 LOG.warnf(ignored, "unable to mark %s decoded", chunkId);
             }
+        }
+    }
+
+    private void syncSidecar(String chunkId) {
+        try {
+            ChunkIndexRow updated = index.get(chunkId);
+            if (updated == null || updated.path() == null || updated.path().isBlank()) {
+                return;
+            }
+            ChunkSidecar.syncEventRange(ChunkSidecar.beside(recordingsDir.resolve(updated.path())), updated);
+        } catch (IOException error) {
+            LOG.warnf(error, "unable to update sidecar for %s", chunkId);
         }
     }
 
