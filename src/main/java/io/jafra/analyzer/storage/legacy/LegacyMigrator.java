@@ -1,13 +1,10 @@
 package io.jafra.analyzer.storage.legacy;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
@@ -23,7 +20,9 @@ import io.jafra.analyzer.index.ChunkIndexRow;
 import io.jafra.analyzer.index.IndexStore;
 import io.jafra.analyzer.storage.ChunkMetadata;
 import io.jafra.analyzer.storage.ChunkPaths;
+import io.jafra.analyzer.storage.ChunkSidecar;
 import io.jafra.analyzer.storage.ChunkStore;
+import io.jafra.analyzer.storage.DurableFiles;
 import io.jafra.analyzer.storage.InvalidIdentityException;
 import io.jafra.analyzer.storage.JfrHeaderTimes;
 
@@ -89,7 +88,7 @@ public final class LegacyMigrator {
             ChunkMetadata metadata = readMeta(meta);
             if (metadata == null || metadata.chunkId() == null || metadata.chunkId().isBlank()) {
                 Path payload = siblingPayload(chunks, meta);
-                quarantine(root, chunkIdFrom(meta), "bad meta", meta, payload);
+                quarantine(root, null, "bad meta", meta, payload);
                 continue;
             }
             accept(root, index, podNames, metadata, chunks.resolve(metadata.chunkId() + ".jfr"), meta);
@@ -115,7 +114,7 @@ public final class LegacyMigrator {
                 ChunkMetadata metadata = readMeta(meta);
                 Path payload = root.resolve("data").resolve(bucket.getFileName()).resolve(meta.getFileName());
                 if (metadata == null || metadata.chunkId() == null || metadata.chunkId().isBlank()) {
-                    quarantine(root, chunkIdFrom(meta), "bad meta", meta, payload);
+                    quarantine(root, null, "bad meta", meta, payload);
                     continue;
                 }
                 accept(root, index, podNames, metadata, payload, meta);
@@ -130,13 +129,24 @@ public final class LegacyMigrator {
             ChunkMetadata metadata,
             Path payload,
             Path meta) throws IOException {
+        ChunkMetadata filled = fill(metadata, payload, podNames);
         if (!Files.isRegularFile(payload)) {
+            ChunkIndexRow existing = index.get(filled.chunkId());
+            Path stored = null;
+            try {
+                stored = ChunkPaths.payload(root, filled);
+            } catch (RuntimeException ignored) {
+                stored = null;
+            }
+            if (existing != null && stored != null && Files.isRegularFile(stored)) {
+                resume(root, index, existing, filled, payload, meta, stored);
+                return;
+            }
             ChunkStore.deleteQuietly(meta);
             dropped++;
             LOG.infof("dropped legacy meta %s because the payload is missing", meta);
             return;
         }
-        ChunkMetadata filled = fill(metadata, payload, podNames);
         String reason = invalidReason(filled);
         if (reason != null) {
             quarantine(root, filled.chunkId(), reason, meta, payload);
@@ -182,8 +192,8 @@ public final class LegacyMigrator {
             resume(root, index, index.get(filled.chunkId()), filled, payload, meta, target);
             return;
         }
-        checkpoint.reach("before-move:" + filled.chunkId());
-        place(root, index, filled, payload, meta, target);
+        checkpoint.reach("after-insert:" + filled.chunkId());
+        place(root, index, row, filled, payload, meta, target);
         migrated++;
     }
 
@@ -199,25 +209,28 @@ public final class LegacyMigrator {
             quarantine(root, filled.chunkId(), "legacy copy does not match the indexed chunk", meta, payload);
             return;
         }
-        boolean targetReady = Files.isRegularFile(target) && Files.size(target) == Files.size(payload);
-        if (targetReady) {
-            ChunkStore.deleteQuietly(payload);
-            ChunkStore.deleteQuietly(meta);
-            if (!ChunkIndexRow.STATUS_STORED.equals(existing.status())) {
-                index.markStored(existing.chunkId());
-            }
-            return;
-        }
-        boolean pending = ChunkIndexRow.STATUS_PENDING.equals(existing.status());
-        if ((pending || ChunkIndexRow.STATUS_STORED.equals(existing.status()))
-                && !Files.isRegularFile(target)
-                && Files.size(payload) == existing.chunkLength()) {
-            checkpoint.reach("before-move:" + filled.chunkId());
-            place(root, index, filled, payload, meta, target);
+        Path sidecar = ChunkPaths.sidecar(root, filled);
+        boolean targetFile = Files.isRegularFile(target);
+        boolean payloadFile = Files.isRegularFile(payload);
+        if (!targetFile && payloadFile && Files.size(payload) == existing.chunkLength()) {
+            place(root, index, existing, filled, payload, meta, target);
             migrated++;
             return;
         }
-        if (Files.size(payload) == existing.chunkLength()) {
+        if (targetFile && Files.size(target) == existing.chunkLength()) {
+            if (!Files.isRegularFile(sidecar)) {
+                writeSidecar(sidecar, existing, filled);
+            }
+            if (!ChunkIndexRow.STATUS_STORED.equals(existing.status())) {
+                index.markStored(existing.chunkId());
+            }
+            if (payloadFile && !payload.equals(target)) {
+                ChunkStore.deleteQuietly(payload);
+            }
+            ChunkStore.deleteQuietly(meta);
+            return;
+        }
+        if (payloadFile && Files.size(payload) == existing.chunkLength()) {
             ChunkStore.deleteQuietly(payload);
             ChunkStore.deleteQuietly(meta);
             return;
@@ -225,17 +238,45 @@ public final class LegacyMigrator {
         quarantine(root, filled.chunkId(), "legacy copy does not match the indexed chunk", meta, payload);
     }
 
-    private void place(Path root, IndexStore index, ChunkMetadata filled, Path payload, Path meta, Path target)
-            throws IOException {
+    private void place(
+            Path root,
+            IndexStore index,
+            ChunkIndexRow row,
+            ChunkMetadata filled,
+            Path payload,
+            Path meta,
+            Path target) throws IOException {
         Files.createDirectories(target.getParent());
+        Path sidecar = ChunkPaths.sidecar(root, filled);
+        if (!Files.isRegularFile(sidecar)) {
+            writeSidecar(sidecar, row, filled);
+        }
+        checkpoint.reach("after-json:" + filled.chunkId());
         if (!Files.isRegularFile(target)) {
-            Files.move(payload, target, StandardCopyOption.ATOMIC_MOVE);
-        } else {
+            if (!Files.isRegularFile(payload)) {
+                throw new IOException("legacy payload missing for " + filled.chunkId());
+            }
+            DurableFiles.moveAtomic(payload, target);
+        }
+        checkpoint.reach("after-payload:" + filled.chunkId());
+        index.markStored(filled.chunkId());
+        checkpoint.reach("after-stored:" + filled.chunkId());
+        if (Files.isRegularFile(payload) && !payload.equals(target)) {
             ChunkStore.deleteQuietly(payload);
         }
-        writeAtomic(ChunkPaths.sidecar(root, filled), MAPPER.writeValueAsBytes(filled));
-        index.markStored(filled.chunkId());
         ChunkStore.deleteQuietly(meta);
+    }
+
+    private static void writeSidecar(Path sidecar, ChunkIndexRow row, ChunkMetadata filled) throws IOException {
+        ChunkSidecar.Document document = ChunkSidecar.from(
+                filled,
+                row.nodeName(),
+                row.fileSequence(),
+                row.chunkSequence(),
+                row.jvmInstance(),
+                row.minEventStartNs(),
+                row.maxEventEndNs());
+        ChunkSidecar.write(sidecar, document);
     }
 
     private static ChunkMetadata fill(ChunkMetadata metadata, Path payload, Map<String, String> podNames) {
@@ -295,7 +336,7 @@ public final class LegacyMigrator {
             for (Path payload : payloads) {
                 String name = payload.getFileName().toString();
                 String chunkId = name.substring(0, name.length() - 4);
-                quarantine(root, chunkId, "orphan payload", payload);
+                quarantine(root, chunkId, "orphan payload", null, payload);
             }
         }
         Path data = root.resolve("data");
@@ -319,31 +360,65 @@ public final class LegacyMigrator {
                 }
                 ChunkFileName.Parsed parsed = ChunkFileName.parse(payload.getFileName().toString());
                 String chunkId = parsed == null ? payload.getFileName().toString() : parsed.chunkId();
-                quarantine(root, chunkId, "orphan payload", payload);
+                quarantine(root, chunkId, "orphan payload", null, payload);
             }
         }
     }
 
-    private void quarantine(Path root, String chunkId, String reason, Path... files) throws IOException {
+    private void quarantine(Path root, String chunkId, String reason, Path meta, Path payload) throws IOException {
         Path dir = root.resolve("data").resolve("quarantine");
         Files.createDirectories(dir);
-        String id = safeId(chunkId);
         boolean moved = false;
-        for (Path file : files) {
-            if (file == null || !Files.isRegularFile(file)) {
-                continue;
-            }
-            String suffix = file.getFileName().toString().endsWith(".jfr") ? ".jfr" : ".json";
-            Path dest = dir.resolve(id + suffix);
-            moveReplacing(file, dest);
+        String reasonBase = null;
+        if (meta != null && Files.isRegularFile(meta)) {
+            String base = quarantineBase(chunkId, meta);
+            DurableFiles.moveAtomic(meta, uniqueDestination(dir, base, ".json"));
             moved = true;
+            reasonBase = base;
+        }
+        if (payload != null && Files.isRegularFile(payload)) {
+            String base = quarantineBase(chunkId, payload);
+            DurableFiles.moveAtomic(payload, uniqueDestination(dir, base, ".jfr"));
+            moved = true;
+            if (reasonBase == null) {
+                reasonBase = base;
+            }
         }
         if (!moved && (chunkId == null || chunkId.isBlank())) {
             return;
         }
-        Files.writeString(dir.resolve(id + ".reason.txt"), reason + System.lineSeparator());
+        if (reasonBase == null) {
+            reasonBase = safeId(chunkId);
+        }
+        Path reasonFile = uniqueDestination(dir, reasonBase, ".reason.txt");
+        Files.writeString(
+                reasonFile,
+                reason + System.lineSeparator(),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE);
         quarantined++;
-        LOG.infof("quarantined %s: %s", id, reason);
+        LOG.infof("quarantined %s: %s", reasonBase, reason);
+    }
+
+    private static String quarantineBase(String chunkId, Path file) {
+        if (chunkId == null || chunkId.isBlank()) {
+            return safeId(file.getFileName().toString());
+        }
+        return safeId(chunkId);
+    }
+
+    private static Path uniqueDestination(Path dir, String base, String suffix) throws IOException {
+        Path first = dir.resolve(base + suffix);
+        if (!Files.exists(first)) {
+            return first;
+        }
+        for (int n = 1; n < 10_000; n++) {
+            Path candidate = dir.resolve(base + "." + n + suffix);
+            if (!Files.exists(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IOException("no free quarantine name for " + base + suffix);
     }
 
     private void cleanup(Path root) throws IOException {
@@ -496,25 +571,6 @@ public final class LegacyMigrator {
             return "unknown";
         }
         return chunkId.replaceAll("[^A-Za-z0-9._-]", "_");
-    }
-
-    private static void moveReplacing(Path source, Path target) throws IOException {
-        try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException error) {
-            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
-        }
-    }
-
-    private static void writeAtomic(Path target, byte[] bytes) throws IOException {
-        Files.createDirectories(target.getParent());
-        Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
-        try (FileChannel channel = FileChannel.open(
-                tmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            channel.write(ByteBuffer.wrap(bytes));
-            channel.force(true);
-        }
-        Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }
 
     public record Result(long migrated, long quarantined, long dropped) {}

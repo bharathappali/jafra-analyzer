@@ -3,6 +3,7 @@ package io.jafra.analyzer.storage.legacy;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -149,6 +150,138 @@ class LegacyMigratorTest {
         } finally {
             crashedIndex.close();
         }
+    }
+
+    @Test
+    void quarantineKeepsEveryOriginalByte(@TempDir Path root) throws Exception {
+        byte[] orphan = new byte[] {8, 8, 8};
+        byte[] badPayload = new byte[] {3, 3};
+        byte[] badMeta = "not-json".getBytes();
+        byte[] mismatchPayload = new byte[] {4};
+        byte[] v0Payload = new byte[] {1, 1, 1};
+        byte[] v1Payload = new byte[] {2, 2, 2};
+
+        ChunkMetadata orphanMeta = chunk("orphan-v1", "auth-cache", "uid-o", 5_000_000_000L, 10, orphan.length);
+        Path orphanPath = root.resolve("data").resolve(ChunkFileName.bucket(orphanMeta)).resolve(ChunkFileName.fileName(orphanMeta));
+        Files.createDirectories(orphanPath.getParent());
+        Files.write(orphanPath, orphan);
+
+        ChunkMetadata bad = chunk("bad-meta-v1", "auth-cache", "uid-b", 6_000_000_000L, 10, badPayload.length);
+        Path badPayloadPath = root.resolve("data").resolve(ChunkFileName.bucket(bad)).resolve(ChunkFileName.fileName(bad));
+        Path badMetaPath = root.resolve("meta").resolve(ChunkFileName.bucket(bad)).resolve(ChunkFileName.fileName(bad));
+        Files.createDirectories(badPayloadPath.getParent());
+        Files.createDirectories(badMetaPath.getParent());
+        Files.write(badPayloadPath, badPayload);
+        Files.write(badMetaPath, badMeta);
+
+        ChunkMetadata mismatch = chunk("mismatch-v1", "auth-cache", "uid-m", 7_000_000_000L, 10, 99);
+        writeV1(root, mismatch, mismatchPayload);
+        byte[] mismatchMeta = Files.readAllBytes(
+                root.resolve("meta").resolve(ChunkFileName.bucket(mismatch)).resolve(ChunkFileName.fileName(mismatch)));
+
+        ChunkMetadata v0 = chunk("same-id", "auth-cache", "uid-s", 8_000_000_000L, 10, 40);
+        writeV0(root, v0, v0Payload);
+        byte[] v0Meta = Files.readAllBytes(root.resolve("chunks/same-id.meta"));
+        ChunkMetadata v1 = new ChunkMetadata(
+                v0.chunkId(),
+                v0.recordingId(),
+                v0.clusterId(),
+                v0.namespace(),
+                v0.podUid(),
+                v0.podName(),
+                v0.containerName(),
+                v0.physicalFilename(),
+                v0.chunkOffset(),
+                41,
+                "other-checksum",
+                v0.chunkStartTimeNs(),
+                v0.chunkDurationNs());
+        writeV1(root, v1, v1Payload);
+        byte[] v1Meta = Files.readAllBytes(
+                root.resolve("meta").resolve(ChunkFileName.bucket(v1)).resolve(ChunkFileName.fileName(v1)));
+
+        IndexStore index = new IndexStore(root);
+        try {
+            new LegacyMigrator().migrate(root, index, Map.of());
+            List<byte[]> saved = quarantineBytes(root.resolve("data/quarantine"));
+            assertOnce(saved, orphan);
+            assertOnce(saved, badPayload);
+            assertOnce(saved, badMeta);
+            assertOnce(saved, mismatchPayload);
+            assertOnce(saved, mismatchMeta);
+            assertOnce(saved, v0Payload);
+            assertOnce(saved, v1Payload);
+            assertOnce(saved, v0Meta);
+            assertOnce(saved, v1Meta);
+        } finally {
+            index.close();
+        }
+    }
+
+    @Test
+    void migrationCrashAfterEachStepLeavesStoredOrLegacy(@TempDir Path root) throws Exception {
+        for (String step : List.of("after-insert", "after-json", "after-payload", "after-stored")) {
+            Path dir = root.resolve(step);
+            byte[] payload = new byte[] {4, 5, 6, (byte) step.length()};
+            ChunkMetadata metadata = chunk("resume", "auth-cache", "uid-resume", 3_000_000_000L, 10, payload.length);
+            writeV0(dir, metadata, payload);
+            byte[] original = payload.clone();
+            byte[] originalMeta = Files.readAllBytes(dir.resolve("chunks/resume.meta"));
+            ChunkStore store = new ChunkStore(dir);
+            try {
+                store.recoverFast();
+                assertThrows(IOException.class, () -> store.runMigration(phase -> {
+                    if (phase.startsWith(step + ":")) {
+                        throw new IOException(step);
+                    }
+                }));
+                store.recoverFast();
+                boolean early = step.equals("after-insert") || step.equals("after-json");
+                if (early) {
+                    assertNull(store.index().get("resume"));
+                    assertFalse(Files.exists(ChunkPaths.payload(dir, metadata)));
+                    assertFalse(Files.exists(ChunkPaths.sidecar(dir, metadata)));
+                    assertArrayEquals(original, Files.readAllBytes(dir.resolve("chunks/resume.jfr")));
+                    assertArrayEquals(originalMeta, Files.readAllBytes(dir.resolve("chunks/resume.meta")));
+                } else {
+                    assertEquals(ChunkIndexRow.STATUS_STORED, store.index().get("resume").status());
+                    assertArrayEquals(original, Files.readAllBytes(ChunkPaths.payload(dir, metadata)));
+                    assertTrue(Files.isRegularFile(ChunkPaths.sidecar(dir, metadata)));
+                }
+                store.runMigration(phase -> {});
+                assertEquals(ChunkIndexRow.STATUS_STORED, store.index().get("resume").status());
+                assertArrayEquals(original, Files.readAllBytes(ChunkPaths.payload(dir, metadata)));
+                assertTrue(Files.isRegularFile(ChunkPaths.sidecar(dir, metadata)));
+                assertFalse(Files.exists(dir.resolve("chunks/resume.jfr")));
+            } finally {
+                store.close();
+            }
+        }
+    }
+
+    private static List<byte[]> quarantineBytes(Path dir) throws IOException {
+        try (var files = Files.list(dir)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> !path.getFileName().toString().endsWith(".reason.txt"))
+                    .map(path -> {
+                        try {
+                            return Files.readAllBytes(path);
+                        } catch (IOException error) {
+                            throw new java.io.UncheckedIOException(error);
+                        }
+                    })
+                    .toList();
+        }
+    }
+
+    private static void assertOnce(List<byte[]> saved, byte[] expected) {
+        int found = 0;
+        for (byte[] candidate : saved) {
+            if (java.util.Arrays.equals(candidate, expected)) {
+                found++;
+            }
+        }
+        assertEquals(1, found, "expected one quarantine copy of " + expected.length + " bytes");
     }
 
     private static void writeV0(Path root, ChunkMetadata metadata, byte[] payload) throws IOException {
