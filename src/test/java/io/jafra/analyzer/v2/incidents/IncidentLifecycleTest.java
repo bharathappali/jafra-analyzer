@@ -116,7 +116,7 @@ class IncidentLifecycleTest {
 
     @Test
     void detectorBands() {
-        LongPauseDetector pauses = new LongPauseDetector(200, 1000);
+        LongPauseDetector pauses = new LongPauseDetector(200, 1000, 85, new HeapSizeAdvice(90));
         JvmRow jvm = new JvmRow(1, "c", "ns", "pod", "uid", "app", 1, 21, "21", "low", 0, 5_000, 1, "{}");
         WindowVerdict warning = pauses.evaluate(input(jvm, row("gc.pause.us", 500_000), false, 0, null, null));
         assertEquals(State.WARNING, warning.state());
@@ -125,12 +125,13 @@ class IncidentLifecycleTest {
         WindowVerdict unproven = pauses.evaluate(input(jvm, row("gc.pause.us", 500_000), false, 10, 1_000_000d, null));
         assertEquals(State.WARNING, unproven.state());
         assertTrue(unproven.band().warning() == 200d);
+        assertTrue(unproven.flags().contains("unproven_baseline"));
 
-        HeapNearFullDetector heap = new HeapNearFullDetector(85, 95);
+        HeapNearFullDetector heap = new HeapNearFullDetector(85, 95, new HeapSizeAdvice(90));
         assertEquals(State.UNKNOWN, heap.evaluate(input(jvm, null, true, 0, null, null)).state());
         assertEquals(State.CRITICAL, heap.evaluate(input(jvm, row("heap.occupancy.pct", 96), true, 0, null, null)).state());
         RollupRow prior = row("heap.occupancy.pct", 96);
-        WindowVerdict carried = new HeapNearFullDetector(85, 95).evaluate(input(jvm, null, true, 0, null, prior));
+        WindowVerdict carried = new HeapNearFullDetector(85, 95, new HeapSizeAdvice(90)).evaluate(input(jvm, null, true, 0, null, prior));
         assertEquals(State.CRITICAL, carried.state());
         assertTrue(carried.flags().contains("carried_forward"));
         assertEquals(State.OK, heap.evaluate(input(jvm, row("heap.occupancy.pct", 40), true, 0, null, null)).state());
@@ -150,13 +151,24 @@ class IncidentLifecycleTest {
         Baseline baseline = new Baseline(
                 null, null, proven ? 60 : (int) Math.min(gcs, 59), gcs, p99, proven ? Set.of() : Set.of("unproven_baseline"));
         Baselines baselines = (name, key, group, stat) -> baseline;
+        List<EventRow> pauses = List.of();
+        if (row != null && "gc.pause.us".equals(row.metric())) {
+            long us = (long) row.max();
+            pauses = List.of(new EventRow(
+                    "gc.pause",
+                    0L,
+                    us,
+                    "",
+                    null,
+                    "{\"collector\":\"G1Young\",\"cause\":\"Allocation Failure\",\"gc_id\":1,\"heap_before\":100,\"heap_after\":80}"));
+        }
         return new WindowInput(
                 jvm,
                 0,
                 5_000,
                 new FixedRollup(totals, earlier),
                 new EmptySamples(),
-                new EmptyEvents(),
+                new ListedEvents(pauses),
                 baselines,
                 new JvmSettings(jvm));
     }
@@ -208,10 +220,16 @@ class IncidentLifecycleTest {
         }
     }
 
-    private static final class EmptyEvents implements EventView {
+    private static final class ListedEvents implements EventView {
+        private final List<EventRow> pauses;
+
+        ListedEvents(List<EventRow> pauses) {
+            this.pauses = pauses;
+        }
+
         @Override
         public List<EventRow> of(String type) {
-            return List.of();
+            return "gc.pause".equals(type) ? pauses : List.of();
         }
 
         @Override

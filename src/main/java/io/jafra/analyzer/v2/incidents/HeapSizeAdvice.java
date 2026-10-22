@@ -1,57 +1,107 @@
 package io.jafra.analyzer.v2.incidents;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import java.util.Locale;
+import java.util.Optional;
 
-/** Shared heap-size todo. Flags come from jvmArguments. JAVA_TOOL_OPTIONS is unverified. */
-public final class HeapSizeAdvice {
-    private HeapSizeAdvice() {}
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
-    public static String todo(JsonNode settings, double heapMaxBytes, Double containerUsagePct, boolean containerHot) {
-        String arguments = settings == null ? "" : settings.path("jvm").path("arguments").asText("");
-        boolean xmx = arguments.contains("-Xmx") || arguments.contains("-XX:MaxHeapSize");
-        String max = bytes(heapMaxBytes);
-        if (containerHot) {
-            String limit = settings == null ? "" : settings.path("container").path("memory_limit").asText("");
-            return "raise the pod memory limit " + (limit.isBlank() ? "(no pod limit was recorded)" : limit)
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
+import io.jafra.analyzer.v2.store.V2Store.RollupRow;
+
+/**
+ * Shared heap-size todo. Flag values come only from {@code jvmArguments}.
+ * Detectors that use this append "flags read from jvmArguments; JAVA_TOOL_OPTIONS unverified".
+ */
+@ApplicationScoped
+public class HeapSizeAdvice {
+    private final double containerWarningPct;
+
+    @Inject
+    public HeapSizeAdvice(
+            @ConfigProperty(name = "jafra.v2.detect.container-near-limit.warning-pct", defaultValue = "90")
+                    double containerWarningPct) {
+        this.containerWarningPct = containerWarningPct;
+    }
+
+    public String todo(JvmSettings settings, RollupView window) {
+        JvmSettings resolved = settings == null ? new JvmSettings(null) : settings;
+        Double heapMax = positive(window, "heap.max.bytes", false);
+        if (heapMax == null) {
+            heapMax = resolved.heapMaxBytes();
+        }
+        Double podLimit = positive(window, "container.limit.bytes", false);
+        if (podLimit == null) {
+            podLimit = resolved.podMemoryLimitBytes();
+        }
+        Double usage = positive(window, "container.usage.pct_limit", true);
+        if (usage != null && usage >= containerWarningPct) {
+            return "raise the pod memory limit " + bytes(podLimit)
                     + " first: metaspace, threads and direct buffers need room outside the heap";
         }
+        boolean xmx = resolved.argument("-Xmx").isPresent() || resolved.argument("-XX:MaxHeapSize").isPresent();
         if (!xmx) {
-            String percent = flag(arguments, "-XX:MaxRAMPercentage");
-            if (percent == null) {
-                percent = "25";
-            }
-            String limit = settings == null ? "" : settings.path("container").path("memory_limit").asText("");
-            String limitText = limit.isBlank() ? "no pod memory limit was recorded" : "pod memory limit " + limit;
-            return "raise -XX:MaxRAMPercentage from " + percent + "% (" + limitText + ", heap max now " + max
-                    + "). Flag source jvmArguments; JAVA_TOOL_OPTIONS was not read";
+            Optional<String> percent = resolved.argument("-XX:MaxRAMPercentage");
+            String from = percent.isEmpty() ? "25% (JDK default)" : number(parse(percent.get())) + "%";
+            String limit = podLimit == null
+                    ? "no pod memory limit set"
+                    : "pod memory limit " + bytes(podLimit);
+            return "raise -XX:MaxRAMPercentage from " + from + " (" + limit + ", heap max now " + bytes(heapMax) + ")";
         }
-        return "raise -Xmx from " + max + ". Flag source jvmArguments; JAVA_TOOL_OPTIONS was not read";
+        return "raise -Xmx from " + bytes(heapMax);
     }
 
-    private static String flag(String arguments, String name) {
-        int at = arguments.indexOf(name);
-        if (at < 0) {
-            return null;
+    /** GiB or MiB with one decimal. Smaller values use KiB, then bytes. */
+    public static String bytes(Double value) {
+        if (value == null || !Double.isFinite(value) || value < 0d) {
+            return "unknown";
         }
-        int eq = arguments.indexOf('=', at);
-        if (eq < 0) {
-            return null;
-        }
-        int end = eq + 1;
-        while (end < arguments.length() && !Character.isWhitespace(arguments.charAt(end))) {
-            end++;
-        }
-        String value = arguments.substring(eq + 1, end).trim();
-        return value.isEmpty() ? null : value;
-    }
-
-    private static String bytes(double value) {
         if (value >= 1_073_741_824d) {
-            return Math.round(value / 1_073_741_824d) + "g";
+            return String.format(Locale.ROOT, "%.1f GiB", value / 1_073_741_824d);
         }
         if (value >= 1_048_576d) {
-            return Math.round(value / 1_048_576d) + "m";
+            return String.format(Locale.ROOT, "%.1f MiB", value / 1_048_576d);
         }
-        return Math.round(value) + "b";
+        if (value >= 1024d) {
+            return String.format(Locale.ROOT, "%.1f KiB", value / 1024d);
+        }
+        return String.format(Locale.ROOT, "%.1f B", value);
+    }
+
+    static String number(double value) {
+        if (!Double.isFinite(value)) {
+            return "unknown";
+        }
+        if (Math.abs(value - Math.rint(value)) < 1e-6) {
+            return Long.toString(Math.round(value));
+        }
+        return String.format(Locale.ROOT, "%.1f", value);
+    }
+
+    private static Double positive(RollupView window, String metric, boolean max) {
+        if (window == null) {
+            return null;
+        }
+        Optional<RollupRow> row = window.total(metric);
+        if (row.isEmpty() || row.get().count() <= 0) {
+            return null;
+        }
+        double value = max ? row.get().max() : row.get().avg();
+        if (!Double.isFinite(value) || value <= 0d) {
+            return null;
+        }
+        return value;
+    }
+
+    private static double parse(String raw) {
+        if (raw == null) {
+            return Double.NaN;
+        }
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException error) {
+            return Double.NaN;
+        }
     }
 }

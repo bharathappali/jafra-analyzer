@@ -2,6 +2,8 @@ package io.jafra.analyzer.v2.incidents;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -53,6 +55,37 @@ final class WindowViews {
             public Optional<RollupRow> lastBefore(String metric) {
                 try {
                     return Optional.ofNullable(store.lastTotalBefore(jvmId, metric, fromMs));
+                } catch (IOException error) {
+                    throw new IllegalStateException(error);
+                }
+            }
+
+            @Override
+            public List<RollupRow> recentBreakdown(String metric, String by, int windows) {
+                try {
+                    List<Long> starts = store.recentWindowStarts(jvmId, fromMs, Math.max(1, windows));
+                    Map<String, double[]> sums = new LinkedHashMap<>();
+                    for (long ts : starts) {
+                        for (RollupRow row : store.readBreakdown(jvmId, metric, by, ts)) {
+                            double[] acc = sums.computeIfAbsent(row.key(), ignored -> new double[] {
+                                Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, 0d, 0d
+                            });
+                            acc[0] = Math.min(acc[0], row.min());
+                            acc[1] = Math.max(acc[1], row.max());
+                            acc[2] += row.count();
+                            acc[3] += row.sum();
+                        }
+                    }
+                    List<RollupRow> rows = new ArrayList<>();
+                    for (Map.Entry<String, double[]> entry : sums.entrySet()) {
+                        double[] acc = entry.getValue();
+                        long count = (long) acc[2];
+                        double sum = acc[3];
+                        double avg = count == 0 ? 0d : sum / count;
+                        rows.add(new RollupRow(jvmId, metric, by, entry.getKey(), fromMs, acc[0], acc[1], avg, count, sum));
+                    }
+                    rows.sort(Comparator.comparingDouble(RollupRow::sum).reversed());
+                    return rows;
                 } catch (IOException error) {
                     throw new IllegalStateException(error);
                 }

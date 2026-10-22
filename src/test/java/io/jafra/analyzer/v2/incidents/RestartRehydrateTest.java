@@ -70,7 +70,11 @@ class RestartRehydrateTest {
         Catalogue catalogue = Catalogue.load();
         BaselineService baselines = new BaselineService(store, catalogue);
         return new IncidentEngine(
-                store, List.of(new LongPauseDetector(200, 1000)), null, baselines, new SurfaceService(store, catalogue, baselines));
+                store,
+                List.of(new LongPauseDetector(200, 1000, 85, new HeapSizeAdvice(90))),
+                null,
+                baselines,
+                new SurfaceService(store, catalogue, baselines));
     }
 
     private static CommitResult commit(V2Store store, long fromMs) throws Exception {

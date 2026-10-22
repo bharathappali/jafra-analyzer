@@ -18,4 +18,12 @@ public interface RollupView {
 
     /** Newest total row of this JVM with {@code ts} before the window, any age. */
     Optional<RollupRow> lastBefore(String metric);
+
+    /**
+     * Breakdown of {@code metric} summed over this window and the {@code windows - 1}
+     * processed windows before it. The default is this window only.
+     */
+    default List<RollupRow> recentBreakdown(String metric, String by, int windows) {
+        return breakdown(metric, by);
+    }
 }

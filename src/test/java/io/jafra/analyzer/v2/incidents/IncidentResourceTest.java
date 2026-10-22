@@ -64,6 +64,7 @@ class IncidentResourceTest {
     void recordedSystemGcOpensLongPause() throws Exception {
         String pod = "pod-" + System.nanoTime();
         java.nio.file.Path dump = Files.createTempFile("jafra-v2-pause", ".jfr");
+        long startMs = System.currentTimeMillis() - 1_000L;
         try (Recording recording = new Recording()) {
             recording.enable("jdk.GarbageCollection");
             recording.enable("jdk.GCHeapSummary");
@@ -80,7 +81,7 @@ class IncidentResourceTest {
         byte[] payload = Files.readAllBytes(dump);
         Files.deleteIfExists(dump);
         String chunkId = "gc-" + pod;
-        long startNs = System.currentTimeMillis() * 1_000_000L;
+        long startNs = startMs * 1_000_000L;
         ChunkMetadata metadata = new ChunkMetadata(
                 chunkId, "rec", "cluster-a", "v2inc", "uid", pod, "app", "profile.jfr", 0, payload.length, "checksum", startNs, 5_000_000_000L);
         ChunkStore.IncomingWrite write = chunks.beginWrite(chunkId);
@@ -114,6 +115,17 @@ class IncidentResourceTest {
         data.toMs = from + 5_000;
         data.dtSeconds = 5;
         data.add(metric, "", "", value);
+        if ("gc.pause.us".equals(metric)) {
+            long us = (long) value;
+            data.event(new WindowData.StoredEvent(
+                    "gc.pause",
+                    from,
+                    us,
+                    "",
+                    null,
+                    null,
+                    "{\"collector\":\"G1Young\",\"cause\":\"System.gc()\",\"gc_id\":1,\"duration_us\":" + us + "}"));
+        }
         return data;
     }
 }

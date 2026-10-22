@@ -46,6 +46,25 @@ public class FrameService {
         this.catalogue = catalogue;
     }
 
+    /**
+     * Allocation site for one stack, callee first. Uses the leaf when its category is already
+     * {@code app}; otherwise {@link Frames#appCaller} from the leaf; otherwise the leaf name.
+     */
+    public static String allocationSite(List<Frame> frames) {
+        if (frames == null || frames.isEmpty()) {
+            return null;
+        }
+        Frame leaf = frames.get(0);
+        if (leaf != null && "app".equals(leaf.category())) {
+            return leaf.name();
+        }
+        String caller = Frames.appCaller(frames, 0);
+        if (caller != null && !caller.isBlank()) {
+            return caller;
+        }
+        return leaf == null ? null : leaf.name();
+    }
+
     public Flame flame(
             JvmRow jvm, String group, String kindParam, String thread, String state, String handler, String last, String from, String to) {
         String kind = flameKind(jvm, group, kindParam);
