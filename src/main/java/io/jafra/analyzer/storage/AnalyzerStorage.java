@@ -28,7 +28,8 @@ public class AnalyzerStorage {
         Files.createDirectories(path);
         ChunkStore store = new ChunkStore(path, index);
         store.onStored(decoder::offer);
-        store.recover();
+        store.onRescan(decoder::rescan);
+        store.recoverFast();
         return store;
     }
 

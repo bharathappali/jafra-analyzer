@@ -4,14 +4,15 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -24,6 +25,7 @@ import io.jafra.analyzer.index.ChunkIndexRow;
 import io.jafra.analyzer.index.IndexStore;
 import io.jafra.analyzer.index.StorageVersion;
 import io.jafra.analyzer.storage.legacy.LegacyMigrator;
+import io.jafra.analyzer.storage.legacy.LegacyMigrator.Checkpoint;
 
 public class ChunkStore {
     private static final Logger LOG = Logger.getLogger(ChunkStore.class);
@@ -39,6 +41,10 @@ public class ChunkStore {
     private final boolean ownsIndex;
     private volatile boolean ready = true;
     private volatile Consumer<String> afterStored = chunkId -> {};
+    private volatile Runnable rescan = () -> {};
+    private volatile Checkpoint migrationCheckpoint = phase -> {};
+    private volatile CrashPoint crashPoint = step -> {};
+    private final AtomicBoolean sidecarRepairStarted = new AtomicBoolean();
     private final Map<String, String> podNames = new ConcurrentHashMap<>();
 
     public ChunkStore(Path root) {
@@ -76,6 +82,18 @@ public class ChunkStore {
         this.afterStored = afterStored == null ? chunkId -> {} : afterStored;
     }
 
+    public void onRescan(Runnable rescan) {
+        this.rescan = rescan == null ? () -> {} : rescan;
+    }
+
+    public void setMigrationCheckpoint(Checkpoint checkpoint) {
+        this.migrationCheckpoint = checkpoint == null ? phase -> {} : checkpoint;
+    }
+
+    public void setCrashPoint(CrashPoint crashPoint) {
+        this.crashPoint = crashPoint == null ? step -> {} : crashPoint;
+    }
+
     public void close() {
         if (ownsIndex) {
             index.close();
@@ -86,7 +104,19 @@ public class ChunkStore {
         return root;
     }
 
+    /** Fast recovery plus a synchronous migration when one is still required. */
     public void recover() throws IOException {
+        recoverFast();
+        if (!ready) {
+            runMigration(migrationCheckpoint);
+        }
+    }
+
+    /**
+     * Directory setup, index rebuild, and pending/deleting reconciliation. Does not migrate legacy
+     * layouts. {@link #ready()} is false when a migration still has to run.
+     */
+    public void recoverFast() throws IOException {
         Files.createDirectories(tmpDir);
         Files.createDirectories(partDir);
         Files.createDirectories(dataDir);
@@ -94,6 +124,7 @@ public class ChunkStore {
         Files.createDirectories(root.resolve("data").resolve("quarantine"));
         Files.createDirectories(identitiesDir);
         deleteTmpParts();
+        deleteJsonTmp();
         if (index.consumeRebuild()) {
             rebuildFromSidecars();
         }
@@ -101,23 +132,57 @@ public class ChunkStore {
         finishDeleting();
         podNames.clear();
         loadIdentities();
-        if (needsMigration()) {
-            ready = false;
-            LegacyMigrator.Result result = new LegacyMigrator().migrate(root, index, podNames);
-            index.setStorageVersion(2, result.migrated(), result.quarantined(), result.dropped());
-            LOG.infof(
-                    "storage migration complete version=2 migrated=%d quarantined=%d dropped=%d",
-                    result.migrated(),
-                    result.quarantined(),
-                    result.dropped());
-            ready = true;
-        } else if (index.storageVersion() == null) {
+        ready = !needsMigration();
+        if (ready && index.storageVersion() == null) {
             index.setStorageVersion(2, 0, 0, 0);
         }
-        for (String chunkId : index.undecodedChunkIds()) {
-            afterStored.accept(chunkId);
+        if (ready) {
+            rescan.run();
         }
         LOG.infof("recovered %d durable chunks under %s", index.storedCount(), root);
+    }
+
+    public void runMigration(Checkpoint checkpoint) throws IOException {
+        if (!needsMigration()) {
+            ready = true;
+            return;
+        }
+        ready = false;
+        Checkpoint hook = checkpoint == null ? phase -> {} : checkpoint;
+        LegacyMigrator.Result result = new LegacyMigrator(hook).migrate(root, index, Map.copyOf(podNames));
+        index.setStorageVersion(2, result.migrated(), result.quarantined(), result.dropped());
+        ready = true;
+        LOG.infof(
+                "storage migration complete version=2 migrated=%d quarantined=%d dropped=%d",
+                result.migrated(),
+                result.quarantined(),
+                result.dropped());
+        rescan.run();
+    }
+
+    public void startSidecarRepair() {
+        if (!sidecarRepairStarted.compareAndSet(false, true)) {
+            return;
+        }
+        Thread thread = new Thread(this::repairMissingSidecars, "jafra-sidecar-repair");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    public void repairMissingSidecars() {
+        try {
+            for (ChunkIndexRow row : index.storedRows()) {
+                if (row.path() == null || row.path().isBlank()) {
+                    continue;
+                }
+                Path sidecar = ChunkSidecar.beside(recordedPayload(row));
+                if (!Files.isRegularFile(sidecar)) {
+                    ChunkSidecar.write(sidecar, ChunkSidecar.fromRow(row));
+                }
+            }
+        } catch (IOException error) {
+            LOG.warnf(error, "sidecar repair failed");
+        }
     }
 
     public boolean contains(String chunkId) {
@@ -247,11 +312,23 @@ public class ChunkStore {
             throw new DuplicateChunkException(metadata.chunkId());
         }
         try {
+            crash("insert");
             Files.createDirectories(payload.getParent());
-            Files.move(incoming.part, payload, StandardCopyOption.ATOMIC_MOVE);
-            writeAtomic(sidecar, MAPPER.writeValueAsBytes(metadata));
+            ChunkSidecar.write(
+                    sidecar,
+                    ChunkSidecar.from(
+                            metadata,
+                            nodeName,
+                            fileSequence,
+                            chunkSequence,
+                            ChunkIndexRow.JVM_INSTANCE_DEFAULT,
+                            startNs,
+                            endNs));
+            crash("json");
+            DurableFiles.moveAtomic(incoming.part, payload);
+            crash("payload");
             index.markStored(metadata.chunkId());
-            afterStored.accept(metadata.chunkId());
+            crash("stored");
         } catch (IOException error) {
             index.delete(metadata.chunkId());
             deleteQuietly(payload);
@@ -259,7 +336,16 @@ public class ChunkStore {
             deleteQuietly(incoming.part);
             throw error;
         }
+        try {
+            afterStored.accept(metadata.chunkId());
+        } catch (Throwable error) {
+            LOG.warnf(error, "decode hook failed for %s", metadata.chunkId());
+        }
         rememberPodName(metadata.namespace(), metadata.podUid(), metadata.podName());
+    }
+
+    private void crash(String step) {
+        crashPoint.after(step);
     }
 
     public void abort(IncomingWrite incoming) {
@@ -268,16 +354,17 @@ public class ChunkStore {
         }
     }
 
-    public Path payloadPath(String chunkId) {
-        try {
-            ChunkIndexRow row = index.get(chunkId);
-            if (row != null && row.path() != null && !row.path().isBlank()) {
-                return root.resolve("data").resolve("recordings").resolve(row.path());
-            }
-        } catch (IOException error) {
-            LOG.warnf(error, "index path lookup failed for %s", chunkId);
+    /** Payload path recorded on the index row. Does not query the index again. */
+    public Path recordedPayload(ChunkIndexRow row) {
+        return root.resolve("data").resolve("recordings").resolve(row.path());
+    }
+
+    public Path payloadPath(String chunkId) throws IOException {
+        ChunkIndexRow row = index.get(chunkId);
+        if (row == null || row.path() == null || row.path().isBlank()) {
+            throw new NoSuchFileException("no stored payload for " + chunkId);
         }
-        return dataDir.resolve("recordings").resolve(chunkId + ".jfr");
+        return recordedPayload(row);
     }
 
     /** Contiguous chunks from offset 0 for a physical recording (holes stop the prefix). */
@@ -328,7 +415,7 @@ public class ChunkStore {
         }
         try {
             Files.createDirectories(identitiesDir);
-            writeAtomic(
+            DurableFiles.writeAtomic(
                     identitiesDir.resolve(safe(podUid) + ".json"),
                     MAPPER.writeValueAsBytes(new WorkloadIdentity(namespace, podName, podUid)));
         } catch (IOException error) {
@@ -382,9 +469,11 @@ public class ChunkStore {
     }
 
     private boolean needsMigration() throws IOException {
+        if (LegacyMigrator.hasLegacy(root)) {
+            return true;
+        }
         StorageVersion version = index.storageVersion();
-        boolean current = version != null && version.storageVersion() == 2;
-        return !current || LegacyMigrator.hasLegacy(root);
+        return version != null && version.storageVersion() != 2;
     }
 
     private void rebuildFromSidecars() throws IOException {
@@ -401,7 +490,8 @@ public class ChunkStore {
 
     private void rebuildOne(Path recordings, Path json) {
         try {
-            ChunkMetadata metadata = MAPPER.readValue(json.toFile(), ChunkMetadata.class);
+            ChunkSidecar.Document document = ChunkSidecar.read(json);
+            ChunkMetadata metadata = ChunkSidecar.metadata(document);
             if (metadata.chunkId() == null || metadata.chunkId().isBlank()) {
                 LOG.warnf("skipping sidecar without a chunk id: %s", json);
                 return;
@@ -415,28 +505,33 @@ public class ChunkStore {
             String relative = recordings.relativize(payload).toString().replace('\\', '/');
             long startNs = metadata.chunkStartTimeNs();
             long endNs = startNs + Math.max(0, metadata.chunkDurationNs());
+            long min = document.minEventStartNs == null ? startNs : document.minEventStartNs;
+            long max = document.maxEventEndNs == null ? endNs : document.maxEventEndNs;
             String cluster = metadata.clusterId() == null || metadata.clusterId().isBlank()
                     ? "default"
                     : metadata.clusterId();
+            String jvm = document.jvmInstance == null || document.jvmInstance.isBlank()
+                    ? ChunkIndexRow.JVM_INSTANCE_DEFAULT
+                    : document.jvmInstance;
             ChunkIndexRow row = new ChunkIndexRow(
                     metadata.chunkId(),
                     metadata.recordingId(),
                     cluster,
-                    null,
+                    document.nodeName,
                     metadata.namespace(),
                     metadata.podName(),
                     metadata.podUid(),
                     metadata.containerName(),
-                    ChunkIndexRow.JVM_INSTANCE_DEFAULT,
+                    jvm,
                     metadata.physicalFilename(),
-                    null,
-                    null,
+                    document.fileSequence,
+                    document.chunkSequence,
                     metadata.chunkOffset(),
                     metadata.chunkLength(),
                     startNs,
                     endNs,
-                    startNs,
-                    endNs,
+                    min,
+                    max,
                     metadata.checksum() == null ? "" : metadata.checksum(),
                     relative,
                     ChunkIndexRow.STATUS_PENDING,
@@ -453,10 +548,15 @@ public class ChunkStore {
     private void reconcilePending() throws IOException {
         Path recordings = root.resolve("data").resolve("recordings");
         for (ChunkIndexRow row : index.pendingRows()) {
-            Path payload = recordings.resolve(row.path() == null ? "" : row.path());
+            Path payload = recordings.resolve(row.path() == null || row.path().isBlank() ? "" : row.path());
+            Path sidecar = ChunkSidecar.beside(payload);
             if (Files.isRegularFile(payload)) {
+                if (!Files.isRegularFile(sidecar)) {
+                    ChunkSidecar.write(sidecar, ChunkSidecar.fromRow(row));
+                }
                 index.markStored(row.chunkId());
             } else {
+                deleteQuietly(sidecar);
                 index.delete(row.chunkId());
             }
         }
@@ -509,6 +609,22 @@ public class ChunkStore {
         deleteParts(partDir);
     }
 
+    private void deleteJsonTmp() throws IOException {
+        deleteJsonTmp(root.resolve("data").resolve("recordings"));
+        deleteJsonTmp(root.resolve("data").resolve("quarantine"));
+    }
+
+    private static void deleteJsonTmp(Path dir) throws IOException {
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        try (Stream<Path> files = Files.walk(dir)) {
+            for (Path file : files.filter(path -> path.getFileName().toString().endsWith(".json.tmp")).toList()) {
+                deleteQuietly(file);
+            }
+        }
+    }
+
     private static void deleteParts(Path dir) throws IOException {
         if (!Files.isDirectory(dir)) {
             return;
@@ -545,19 +661,6 @@ public class ChunkStore {
             return "_";
         }
         return cleaned;
-    }
-
-    private static void writeAtomic(Path target, byte[] bytes) throws IOException {
-        Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
-        try (FileChannel channel = FileChannel.open(
-                tmp,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.WRITE,
-                StandardOpenOption.TRUNCATE_EXISTING)) {
-            channel.write(ByteBuffer.wrap(bytes));
-            channel.force(true);
-        }
-        Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }
 
     public static void deleteQuietly(Path path) {
@@ -601,6 +704,11 @@ public class ChunkStore {
         public String chunkId() {
             return chunkId;
         }
+    }
+
+    @FunctionalInterface
+    public interface CrashPoint {
+        void after(String step);
     }
 
     public record WorkloadIdentity(
