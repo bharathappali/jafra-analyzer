@@ -34,6 +34,10 @@ public class RetentionJob {
     }
 
     public void purge(Duration retention) {
+        if (!store.ready()) {
+            LOG.debugf("skipping retention sweep until storage is ready");
+            return;
+        }
         if (retention == null) {
             return;
         }
