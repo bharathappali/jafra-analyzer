@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import io.jafra.analyzer.v2.incidents.support.FullGcClassifier;
 import io.jafra.analyzer.v2.rollup.ApSampling;
 import io.jafra.analyzer.v2.rollup.ChunkFacts;
 import io.jafra.analyzer.v2.rollup.Frame;
@@ -578,18 +579,13 @@ public final class Extractors {
         double sum = 0;
         Map<String, Long> byCollector = new LinkedHashMap<>();
         Map<String, Long> byCause = new LinkedHashMap<>();
-        Set<Long> fullIds = new java.util.HashSet<>();
-        for (Seen old : facts.ofType("jdk.OldGarbageCollection")) {
-            fullIds.add(old.id("gcId"));
-        }
-        for (Seen g1 : facts.ofType("jdk.G1GarbageCollection")) {
-            String type = g1.text("type");
-            if (type != null && type.toLowerCase().contains("full")) {
-                fullIds.add(g1.id("gcId"));
-            }
-        }
+        FullGcClassifier fullGcs = FullGcClassifier.defaults();
+        int full = 0;
         if (!byId.isEmpty()) {
             for (Seen gc : byId.values()) {
+                if (fullGcs.isFull(gc.text("name"))) {
+                    full++;
+                }
                 Double pauses = gc.num("sumOfPauses");
                 if (pauses != null) {
                     sum += pauses;
@@ -612,9 +608,7 @@ public final class Extractors {
                 flushRates(out, "gc.count.per_s", "collector", byCollector, dt);
                 flushRates(out, "gc.count.per_s", "cause", byCause, dt);
             }
-        }
-        if (!fullIds.isEmpty()) {
-            out.add("gc.full.count", "", "", fullIds.size());
+            out.add("gc.full.count", "", "", full);
         }
         double cpuUs = 0;
         for (Seen time : facts.ofType("jdk.GCCPUTime")) {
@@ -857,7 +851,8 @@ public final class Extractors {
                     out.add("locks.wait.ms", "", "", ms);
                 }
                 long stackId = remember(out, event.frames);
-                out.sample("lock", stackId, event.thread, "", "", 1, ms);
+                String lockClass = firstText(event, "monitorClass", "parkedClass");
+                out.sample("lock", stackId, event.thread, "", "", lockClass, 1, ms);
             }
         }
         double dt = out.dtSeconds > 0d ? out.dtSeconds : facts.dtSeconds;
@@ -1542,7 +1537,7 @@ public final class Extractors {
         out.event(new WindowData.StoredEvent(type, ts, duration, blank(thread), top, stackId, json(fields)));
     }
 
-    private static long remember(WindowData out, List<Frame> frames) {
+    public static long remember(WindowData out, List<Frame> frames) {
         long id = Frames.hash(frames);
         out.stack(id, framesJson(frames));
         return id;

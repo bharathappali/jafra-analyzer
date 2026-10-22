@@ -1,5 +1,7 @@
 package io.jafra.analyzer.v2.incidents;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -31,6 +33,16 @@ public final class JvmSettings {
 
     public JsonNode raw() {
         return raw;
+    }
+
+    /** Internal. Not part of get_jvm_info. */
+    public List<String> declaredEventTypes() {
+        List<String> types = new ArrayList<>();
+        JsonNode node = raw.path("declared_event_types");
+        if (node.isArray()) {
+            node.forEach(item -> types.add(item.asText()));
+        }
+        return types;
     }
 
     public String jvmArguments() {

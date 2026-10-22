@@ -55,6 +55,7 @@ public final class WindowData {
     private final List<CounterObs> counters = new ArrayList<>();
     private final List<StoredEvent> events = new ArrayList<>();
     private final List<StoredEvent> internalEvents = new ArrayList<>();
+    private final List<SeriesPoint> internalSeries = new ArrayList<>();
     private final Map<Long, String> stacks = new LinkedHashMap<>();
     private final Map<SampleKey, SampleAccum> samples = new LinkedHashMap<>();
 
@@ -98,12 +99,25 @@ public final class WindowData {
         internalEvents.add(event);
     }
 
+    public void internalSeries(String name, String key, double value) {
+        internalSeries.add(new SeriesPoint(name, key == null ? "" : key, value));
+    }
+
+    public List<SeriesPoint> internalSeries() {
+        return internalSeries;
+    }
+
     public void stack(long stackId, String framesJson) {
         stacks.putIfAbsent(stackId, framesJson);
     }
 
     public void sample(String kind, long stackId, String thread, String state, String handler, long count, double weight) {
-        SampleKey key = new SampleKey(kind, stackId, blank(thread), blank(state), blank(handler));
+        sample(kind, stackId, thread, state, handler, null, count, weight);
+    }
+
+    public void sample(
+            String kind, long stackId, String thread, String state, String handler, String lockClass, long count, double weight) {
+        SampleKey key = new SampleKey(kind, stackId, blank(thread), blank(state), blank(handler), blank(lockClass));
         samples.computeIfAbsent(key, ignored -> new SampleAccum()).add(count, weight);
     }
 
@@ -320,6 +334,8 @@ public final class WindowData {
 
     public record CounterObs(String metric, String byName, String key, double value) {}
 
+    public record SeriesPoint(String name, String key, double value) {}
+
     public record StoredEvent(
             String type,
             long tsMs,
@@ -329,7 +345,7 @@ public final class WindowData {
             Long stackId,
             String fieldsJson) {}
 
-    public record SampleKey(String kind, long stackId, String thread, String state, String handler) {}
+    public record SampleKey(String kind, long stackId, String thread, String state, String handler, String lockClass) {}
 
     public static final class SampleAccum {
         public long count;

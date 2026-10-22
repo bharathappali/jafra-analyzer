@@ -104,6 +104,7 @@ public class V2Store {
             appendHist(jvmId, data);
             appendEvents(jvmId, data);
             appendInternalEvents(jvmId, data);
+            appendInternalSeries(jvmId, data);
             insertStacks(data);
             appendSamples(jvmId, data);
             insertWindow(connection, jvmId, chunkId, data, late);
@@ -346,6 +347,11 @@ public class V2Store {
      */
     public List<BaselineSlot> baselineSlots(
             int jvmId, String metric, String key, String group, long beforeMs, int limit) throws IOException {
+        boolean internal = metric != null && metric.startsWith("internal.");
+        String valueColumns = internal ? "s.value, s.value, s.value, 1, s.value" : "r.min, r.max, r.avg, r.count, r.sum";
+        String join = internal
+                ? "LEFT JOIN internal_series s ON s.jvm_id = ? AND s.ts = c.ts AND s.name = ? AND s.key = ?"
+                : "LEFT JOIN rollup_5s r ON r.jvm_id = ? AND r.ts = c.ts AND r.metric = ? AND r.by_name = '' AND r.key = ?";
         String sql = """
                 WITH chosen AS (
                     SELECT w.ts
@@ -357,12 +363,11 @@ public class V2Store {
                         WHERE i.jvm_id = w.jvm_id AND i.group_name = ? AND i.ts = w.ts)
                     ORDER BY w.ts DESC
                     LIMIT ?)
-                SELECT c.ts, r.min, r.max, r.avg, r.count, r.sum
+                SELECT c.ts, %s
                 FROM chosen c
-                LEFT JOIN rollup_5s r
-                  ON r.jvm_id = ? AND r.ts = c.ts AND r.metric = ? AND r.by_name = '' AND r.key = ?
+                %s
                 ORDER BY c.ts
-                """;
+                """.formatted(valueColumns, join);
         try (Connection read = readConnection();
                 PreparedStatement statement = read.prepareStatement(sql)) {
             statement.setInt(1, jvmId);
@@ -704,7 +709,7 @@ public class V2Store {
             int jvmId, String kind, long fromMs, long toMs, String thread, String state, String handler)
             throws IOException {
         StringBuilder sql = new StringBuilder(
-                "SELECT ts, kind, stack_id, thread, state, handler, count, weight FROM samples WHERE jvm_id = ? AND ts >= ? AND ts < ?");
+                "SELECT ts, kind, stack_id, thread, state, handler, count, weight, lock_class FROM samples WHERE jvm_id = ? AND ts >= ? AND ts < ?");
         if (kind != null) {
             sql.append(" AND kind = ?");
         }
@@ -746,7 +751,8 @@ public class V2Store {
                             rows.getString(5),
                             rows.getString(6),
                             rows.getLong(7),
-                            rows.getDouble(8)));
+                            rows.getDouble(8),
+                            rows.getString(9)));
                 }
                 return found;
             }
@@ -802,7 +808,7 @@ public class V2Store {
             }
         }
         if ("duration".equals(sort)) {
-            sql.append(" ORDER BY duration_us DESC NULLS LAST");
+            sql.append(" ORDER BY duration_us DESC NULLS LAST, ts DESC");
         } else {
             sql.append(" ORDER BY ts DESC");
         }
@@ -1113,6 +1119,7 @@ public class V2Store {
             deleteTs("hist", horizonMs);
             deleteTs("events", horizonMs);
             deleteTs("internal_events", horizonMs);
+            deleteTs("internal_series", horizonMs);
             deleteTs("samples", horizonMs);
             deleteTs("windows", horizonMs);
             deleteTs("incident_windows", horizonMs);
@@ -1393,6 +1400,65 @@ public class V2Store {
         }
     }
 
+    public void writeInternalSeries(int jvmId, String name, String key, long ts, double value) throws IOException {
+        synchronized (this) {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "INSERT INTO internal_series (jvm_id, name, key, ts, value) VALUES (?, ?, ?, ?, ?)")) {
+                statement.setInt(1, jvmId);
+                statement.setString(2, name);
+                statement.setString(3, key == null ? "" : key);
+                statement.setLong(4, ts);
+                statement.setDouble(5, value);
+                statement.executeUpdate();
+            } catch (SQLException error) {
+                throw io(error);
+            }
+        }
+    }
+
+    public List<TimedValue> readInternalPoints(int jvmId, String name, String key, long fromMs, long toMs) throws IOException {
+        String sql = """
+                SELECT ts, value FROM internal_series
+                WHERE jvm_id = ? AND name = ? AND key = ? AND ts >= ? AND ts < ?
+                ORDER BY ts
+                """;
+        try (Connection read = readConnection();
+                PreparedStatement statement = read.prepareStatement(sql)) {
+            statement.setInt(1, jvmId);
+            statement.setString(2, name);
+            statement.setString(3, key == null ? "" : key);
+            statement.setLong(4, fromMs);
+            statement.setLong(5, toMs);
+            try (ResultSet rows = statement.executeQuery()) {
+                List<TimedValue> found = new ArrayList<>();
+                while (rows.next()) {
+                    found.add(new TimedValue(rows.getLong(1), rows.getDouble(2)));
+                }
+                return found;
+            }
+        } catch (SQLException error) {
+            throw io(error);
+        }
+    }
+
+    private void appendInternalSeries(int jvmId, WindowData data) throws SQLException {
+        if (data.internalSeries().isEmpty()) {
+            return;
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO internal_series (jvm_id, name, key, ts, value) VALUES (?, ?, ?, ?, ?)")) {
+            for (WindowData.SeriesPoint point : data.internalSeries()) {
+                statement.setInt(1, jvmId);
+                statement.setString(2, point.name());
+                statement.setString(3, point.key());
+                statement.setLong(4, data.fromMs);
+                statement.setDouble(5, point.value());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
     private void appendSamples(int jvmId, WindowData data) throws SQLException {
         try (DuckDBAppender appender = ((DuckDBConnection) connection).createAppender(
                 DuckDBConnection.DEFAULT_SCHEMA, "samples")) {
@@ -1408,6 +1474,7 @@ public class V2Store {
                 appender.append(key.handler());
                 appender.append(entry.getValue().count);
                 appender.append(entry.getValue().weight);
+                appender.append(key.lockClass());
                 appender.endRow();
             }
         }
@@ -1650,7 +1717,17 @@ public class V2Store {
                         state VARCHAR,
                         handler VARCHAR,
                         count BIGINT,
-                        weight DOUBLE)
+                        weight DOUBLE,
+                        lock_class VARCHAR)
+                    """);
+            statement.execute("ALTER TABLE samples ADD COLUMN IF NOT EXISTS lock_class VARCHAR");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS internal_series (
+                        jvm_id INTEGER,
+                        name VARCHAR,
+                        key VARCHAR NOT NULL DEFAULT '',
+                        ts BIGINT,
+                        value DOUBLE)
                     """);
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS incidents (
@@ -1811,8 +1888,23 @@ public class V2Store {
     public record EventRow(
             String type, long ts, Long durationUs, String thread, String topFrame, String fields) {}
 
+    public record TimedValue(long ts, double value) {}
+
     public record SampleRow(
-            long ts, String kind, long stackId, String thread, String state, String handler, long count, double weight) {}
+            long ts,
+            String kind,
+            long stackId,
+            String thread,
+            String state,
+            String handler,
+            long count,
+            double weight,
+            String lockClass) {
+        public SampleRow(
+                long ts, String kind, long stackId, String thread, String state, String handler, long count, double weight) {
+            this(ts, kind, stackId, thread, state, handler, count, weight, null);
+        }
+    }
 
     public record IncidentRecord(
             String id,

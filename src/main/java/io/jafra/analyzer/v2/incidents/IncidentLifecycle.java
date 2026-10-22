@@ -242,7 +242,7 @@ public final class IncidentLifecycle {
         if (last == null || !isBad(last)) {
             return false;
         }
-        if (kind == Kind.INSTANT) {
+        if (kind == Kind.INSTANT || last.verdict().openNow()) {
             return true;
         }
         int bad = 0;

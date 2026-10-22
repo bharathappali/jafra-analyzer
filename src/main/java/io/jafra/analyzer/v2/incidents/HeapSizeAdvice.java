@@ -6,8 +6,6 @@ import java.util.Optional;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-
 import io.jafra.analyzer.v2.store.V2Store.RollupRow;
 
 /**
@@ -19,9 +17,11 @@ public class HeapSizeAdvice {
     private final double containerWarningPct;
 
     @Inject
-    public HeapSizeAdvice(
-            @ConfigProperty(name = "jafra.v2.detect.container-near-limit.warning-pct", defaultValue = "90")
-                    double containerWarningPct) {
+    public HeapSizeAdvice(DetectorBands bands) {
+        this(bands.containerNearLimit().warningPct());
+    }
+
+    public HeapSizeAdvice(double containerWarningPct) {
         this.containerWarningPct = containerWarningPct;
     }
 

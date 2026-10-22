@@ -80,8 +80,10 @@ public final class ChunkReader {
         String arguments = jvm == null ? "" : text(jvm, "jvmArguments");
         Map<String, Double> thresholds = thresholds(events, typeNames);
         String profile = profile(thresholds.get("jdk.ExecuteVMOperation"));
-        String settings = settings(jvm, version, start, arguments, profile, thresholds, events);
-        return new ChunkFacts(events, dt, from, to, major, version, start, profile, settings, thresholds, lockIntervalMs);
+        String settings = settings(jvm, version, start, arguments, profile, thresholds, events, typeNames.values());
+        ChunkFacts facts = new ChunkFacts(events, dt, from, to, major, version, start, profile, settings, thresholds, lockIntervalMs);
+        facts.eventTypes = java.util.Set.copyOf(typeNames.values());
+        return facts;
     }
 
     private static Seen copy(RecordedEvent event) {
@@ -260,7 +262,8 @@ public final class ChunkReader {
             String arguments,
             String profile,
             Map<String, Double> thresholds,
-            List<Seen> events) {
+            List<Seen> events,
+            java.util.Collection<String> eventTypes) {
         Map<String, Object> root = new LinkedHashMap<>();
         Map<String, Object> jvmNode = new LinkedHashMap<>();
         jvmNode.put("version", version == null ? "" : version);
@@ -285,6 +288,7 @@ public final class ChunkReader {
         root.put("recording", recording);
         root.put("k8s", Map.of("namespace", "", "pod", "", "container", ""));
         root.put("nmt", nmtEnabled(arguments) ? "enabled" : "off");
+        root.put("declared_event_types", eventTypes == null ? List.of() : List.copyOf(eventTypes));
         try {
             return JSON.writeValueAsString(root);
         } catch (JsonProcessingException error) {

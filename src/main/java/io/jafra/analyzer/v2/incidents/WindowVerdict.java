@@ -21,7 +21,28 @@ public record WindowVerdict(
         String headline,
         List<String> sourceEvents,
         Set<String> flags,
-        Long measuredAt) {
+        Long measuredAt,
+        boolean openNow) {
+
+    /** Step -1a shape. {@code openNow} stays false so existing detectors keep compiling. */
+    public WindowVerdict(
+            State state,
+            Double value,
+            String unit,
+            Double limit,
+            Band band,
+            String family,
+            String reason,
+            Who who,
+            List<WhereFrame> where,
+            List<String> todo,
+            String felt,
+            String headline,
+            List<String> sourceEvents,
+            Set<String> flags,
+            Long measuredAt) {
+        this(state, value, unit, limit, band, family, reason, who, where, todo, felt, headline, sourceEvents, flags, measuredAt, false);
+    }
 
     public WindowVerdict {
         where = cap(where, 5);

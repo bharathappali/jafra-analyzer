@@ -9,8 +9,6 @@ import java.util.Set;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-
 import io.jafra.analyzer.v2.api.V2Times;
 import io.jafra.analyzer.v2.incidents.IncidentLifecycle.State;
 import io.jafra.analyzer.v2.store.V2Store.RollupRow;
@@ -22,10 +20,11 @@ public class HeapNearFullDetector implements Detector {
     private final HeapSizeAdvice advice;
 
     @Inject
-    public HeapNearFullDetector(
-            @ConfigProperty(name = "jafra.v2.detect.heap-near-full.warning-pct", defaultValue = "85") double warningPct,
-            @ConfigProperty(name = "jafra.v2.detect.heap-near-full.critical-pct", defaultValue = "95") double criticalPct,
-            HeapSizeAdvice advice) {
+    public HeapNearFullDetector(DetectorBands bands, HeapSizeAdvice advice) {
+        this(bands.heapNearFull().warningPct(), bands.heapNearFull().criticalPct(), advice);
+    }
+
+    public HeapNearFullDetector(double warningPct, double criticalPct, HeapSizeAdvice advice) {
         this.warningPct = warningPct;
         this.criticalPct = criticalPct;
         this.advice = advice;

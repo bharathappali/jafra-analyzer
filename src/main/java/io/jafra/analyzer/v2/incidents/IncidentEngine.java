@@ -3,8 +3,10 @@ package io.jafra.analyzer.v2.incidents;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -43,16 +45,18 @@ public class IncidentEngine {
     private final Event<WindowAssessed> assessed;
     private final BaselineService baselines;
     private final SurfaceService surface;
+    private final List<TogetherRule> rules;
     private final ConcurrentHashMap<String, Track> tracks = new ConcurrentHashMap<>();
 
     @Inject
     public IncidentEngine(
             V2Store store,
             Instance<Detector> detectors,
+            Instance<TogetherRule> rules,
             Event<WindowAssessed> assessed,
             BaselineService baselines,
             SurfaceService surface) {
-        this(store, copy(detectors), assessed, baselines, surface);
+        this(store, copy(detectors), copyRules(rules), assessed, baselines, surface);
     }
 
     IncidentEngine(
@@ -61,8 +65,19 @@ public class IncidentEngine {
             Event<WindowAssessed> assessed,
             BaselineService baselines,
             SurfaceService surface) {
+        this(store, detectors, List.of(), assessed, baselines, surface);
+    }
+
+    IncidentEngine(
+            V2Store store,
+            List<Detector> detectors,
+            List<TogetherRule> rules,
+            Event<WindowAssessed> assessed,
+            BaselineService baselines,
+            SurfaceService surface) {
         this.store = store;
         this.detectors = List.copyOf(detectors);
+        this.rules = List.copyOf(rules);
         this.assessed = assessed;
         this.baselines = baselines;
         this.surface = surface;
@@ -98,11 +113,27 @@ public class IncidentEngine {
                     new JvmSettings(jvm));
             List<String> opened = new ArrayList<>();
             List<String> closed = new ArrayList<>();
+            Map<String, WindowVerdict> verdicts = new LinkedHashMap<>();
+            List<Detector> active = new ArrayList<>();
             for (Detector detector : detectors) {
                 if (!supports(detector, jvm.jdkMajor())) {
                     continue;
                 }
-                WindowVerdict verdict = detector.evaluate(input);
+                verdicts.put(detector.type(), detector.evaluate(input));
+                active.add(detector);
+            }
+            List<IncidentRecord> open = new ArrayList<>();
+            for (IncidentRecord row : store.openIncidents()) {
+                if (row.jvmId() == jvm.jvmId()) {
+                    open.add(row);
+                }
+            }
+            TogetherContext context = new TogetherContext(verdicts, open);
+            for (TogetherRule rule : rules) {
+                rule.apply(context);
+            }
+            for (Detector detector : active) {
+                WindowVerdict verdict = verdicts.get(detector.type());
                 String id = apply(jvm, detector, verdict, committed.fromMs(), committed.toMs());
                 Track track = tracks.get(key(jvm.jvmId(), detector.type()));
                 if (id == null || track == null) {
@@ -573,6 +604,14 @@ public class IncidentEngine {
 
     private static String text(String value) {
         return value == null ? "" : value;
+    }
+
+    private static List<TogetherRule> copyRules(Instance<TogetherRule> rules) {
+        List<TogetherRule> found = new ArrayList<>();
+        if (rules != null) {
+            rules.forEach(found::add);
+        }
+        return found;
     }
 
     private static List<Detector> copy(Instance<Detector> detectors) {

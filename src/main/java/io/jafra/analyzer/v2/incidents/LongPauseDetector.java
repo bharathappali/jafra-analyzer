@@ -9,8 +9,6 @@ import java.util.Set;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.jafra.analyzer.v2.incidents.IncidentLifecycle.State;
@@ -26,11 +24,11 @@ public class LongPauseDetector implements Detector {
     private final HeapSizeAdvice advice;
 
     @Inject
-    public LongPauseDetector(
-            @ConfigProperty(name = "jafra.v2.detect.long-pause.warning-ms", defaultValue = "200") double warningMs,
-            @ConfigProperty(name = "jafra.v2.detect.long-pause.critical-ms", defaultValue = "1000") double criticalMs,
-            @ConfigProperty(name = "jafra.v2.detect.heap-near-full.warning-pct", defaultValue = "85") double heapWarningPct,
-            HeapSizeAdvice advice) {
+    public LongPauseDetector(DetectorBands bands, HeapSizeAdvice advice) {
+        this(bands.longPause().warningMs(), bands.longPause().criticalMs(), bands.heapNearFull().warningPct(), advice);
+    }
+
+    public LongPauseDetector(double warningMs, double criticalMs, double heapWarningPct, HeapSizeAdvice advice) {
         this.warningMs = warningMs;
         this.criticalMs = criticalMs;
         this.heapWarningPct = heapWarningPct;

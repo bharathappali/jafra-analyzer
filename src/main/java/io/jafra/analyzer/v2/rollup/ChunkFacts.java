@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** One stored chunk, already read. Extractors do not touch JFR. */
 public final class ChunkFacts {
@@ -20,6 +21,8 @@ public final class ChunkFacts {
     public final Map<String, Double> thresholdMs;
     /** UNVERIFIED lock-sampler interval, milliseconds. */
     public final double lockIntervalMs;
+    /** Event types declared in the chunk. Filled by ChunkReader. */
+    public Set<String> eventTypes = Set.of();
 
     public ChunkFacts(
             List<Seen> events,
