@@ -27,7 +27,10 @@ import jdk.jfr.consumer.RecordingFile;
 /** Reads exactly one chunk file into {@link ChunkFacts}. Never concatenates chunks. */
 public final class ChunkReader {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Pattern VERSION_MAJOR = Pattern.compile("(\\d+)(?:\\.(\\d+))?");
+    private static final Pattern PAREN_MAJOR = Pattern.compile("\\((?:1\\.)?(\\d+)");
+    private static final Pattern FIRST_NUMBER = Pattern.compile("(\\d+)(?:\\.(\\d+))?");
+    private static final int JDK_MIN = 8;
+    private static final int JDK_MAX = 40;
 
     private final double lockIntervalMs;
 
@@ -72,17 +75,15 @@ public final class ChunkReader {
         }
         Seen jvm = last(events, "jdk.JVMInformation");
         String version = jvm == null ? "" : text(jvm, "jvmVersion");
-        int major = major(version);
-        if (major == 0) {
-            major = Runtime.version().feature();
-        }
-        long start = jvm == null ? from : instantMillis(jvm, "jvmStartTime", from);
+        int major = jvm == null ? 0 : resolveMajor(version, events);
+        long start = jvm == null ? 0L : instantMillis(jvm, "jvmStartTime", from);
         String arguments = jvm == null ? "" : text(jvm, "jvmArguments");
         Map<String, Double> thresholds = thresholds(events, typeNames);
         String profile = profile(thresholds.get("jdk.ExecuteVMOperation"));
         String settings = settings(jvm, version, start, arguments, profile, thresholds, events, typeNames.values());
         ChunkFacts facts = new ChunkFacts(events, dt, from, to, major, version, start, profile, settings, thresholds, lockIntervalMs);
         facts.eventTypes = java.util.Set.copyOf(typeNames.values());
+        facts.sawJvmInformation = jvm != null;
         return facts;
     }
 
@@ -240,19 +241,76 @@ public final class ChunkReader {
         return "custom";
     }
 
+    /**
+     * Major from the parenthesized build, e.g. {@code (21.0.12} or {@code (1.8.0}. Outside 8..40 is unknown.
+     */
     static int major(String version) {
+        Integer parenthesized = parenthesizedMajor(version);
+        if (parenthesized != null) {
+            return parenthesized;
+        }
+        return firstNumberInRange(version);
+    }
+
+    static int resolveMajor(String version, List<Seen> events) {
+        Integer parenthesized = parenthesizedMajor(version);
+        if (parenthesized != null) {
+            return parenthesized;
+        }
+        String property = systemProperty(events, "java.version");
+        if (property == null) {
+            property = systemProperty(events, "java.vm.version");
+        }
+        if (property != null) {
+            int fromProperty = major(property);
+            if (fromProperty != 0) {
+                return fromProperty;
+            }
+        }
+        return firstNumberInRange(version);
+    }
+
+    private static Integer parenthesizedMajor(String version) {
+        if (version == null || version.isBlank()) {
+            return null;
+        }
+        Matcher matcher = PAREN_MAJOR.matcher(version);
+        if (!matcher.find()) {
+            return null;
+        }
+        int value = Integer.parseInt(matcher.group(1));
+        if (value < JDK_MIN || value > JDK_MAX) {
+            return null;
+        }
+        return value;
+    }
+
+    private static int firstNumberInRange(String version) {
         if (version == null || version.isBlank()) {
             return 0;
         }
-        Matcher matcher = VERSION_MAJOR.matcher(version);
+        Matcher matcher = FIRST_NUMBER.matcher(version);
         if (!matcher.find()) {
             return 0;
         }
         int first = Integer.parseInt(matcher.group(1));
-        if (first == 1 && matcher.group(2) != null) {
-            return Integer.parseInt(matcher.group(2));
+        int value = first == 1 && matcher.group(2) != null ? Integer.parseInt(matcher.group(2)) : first;
+        if (value < JDK_MIN || value > JDK_MAX) {
+            return 0;
         }
-        return first;
+        return value;
+    }
+
+    private static String systemProperty(List<Seen> events, String key) {
+        if (events == null) {
+            return null;
+        }
+        for (Seen event : events) {
+            if ("jdk.InitialSystemProperty".equals(event.type) && key.equals(event.text("key"))) {
+                return event.text("value");
+            }
+        }
+        return null;
     }
 
     private static String settings(
@@ -289,6 +347,7 @@ public final class ChunkReader {
         root.put("k8s", Map.of("namespace", "", "pod", "", "container", ""));
         root.put("nmt", nmtEnabled(arguments) ? "enabled" : "off");
         root.put("declared_event_types", eventTypes == null ? List.of() : List.copyOf(eventTypes));
+        jsonNumbers(root);
         try {
             return JSON.writeValueAsString(root);
         } catch (JsonProcessingException error) {
@@ -370,7 +429,7 @@ public final class ChunkReader {
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("cpu", cpu == null ? null : text(cpu, "cpu"));
         node.put("cores", cpu == null ? null : cpu.num("cores"));
-        node.put("os", os == null ? null : text(os, "osVersion"));
+        node.put("os", prettyName(os == null ? null : text(os, "osVersion")));
         node.put("virtualization", virt == null ? null : text(virt, "name"));
         node.put("physical_memory", memory == null ? null : memory.num("totalSize"));
         return node;
@@ -405,6 +464,47 @@ public final class ChunkReader {
             }
         }
         return null;
+    }
+
+    static String prettyName(String osVersion) {
+        if (osVersion == null || osVersion.isBlank()) {
+            return osVersion;
+        }
+        Matcher matcher = Pattern.compile("PRETTY_NAME=\"([^\"]*)\"").matcher(osVersion);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return osVersion;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void jsonNumbers(Object node) {
+        if (node instanceof Map<?, ?> map) {
+            Map<String, Object> values = (Map<String, Object>) map;
+            for (Map.Entry<String, Object> entry : values.entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof Double number) {
+                    entry.setValue(jsonNumber(number));
+                } else {
+                    jsonNumbers(value);
+                }
+            }
+        } else if (node instanceof List<?> list) {
+            for (Object value : list) {
+                jsonNumbers(value);
+            }
+        }
+    }
+
+    private static Object jsonNumber(Double value) {
+        if (value == null || value.isNaN() || value.isInfinite() || value.doubleValue() == (double) Long.MIN_VALUE) {
+            return null;
+        }
+        long asLong = value.longValue();
+        if (value.doubleValue() == (double) asLong) {
+            return asLong;
+        }
+        return value;
     }
 
     private static String orNotSet(String value) {

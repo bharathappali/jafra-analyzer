@@ -201,24 +201,72 @@ public class RollupWriter {
         data.toMs = Math.max(data.fromMs + 1, millis(row.endNs()));
         data.dtSeconds = Math.max(0.001d, (data.toMs - data.fromMs) / 1000d);
         if (facts == null) {
-            data.jvmStartMs = data.fromMs;
-            data.jdkMajor = Runtime.version().feature();
+            data.jvmStartMs = 0L;
+            data.jdkMajor = 0;
             data.profile = "custom";
             data.settingsJson = "{}";
         } else {
-            data.jvmStartMs = facts.jvmStartMs == 0L ? data.fromMs : facts.jvmStartMs;
+            data.jvmStartMs = facts.jvmStartMs;
             data.jdkMajor = facts.jdkMajor;
             data.jdkVersion = facts.jdkVersion;
             data.profile = facts.profile;
             data.settingsJson = withK8s(facts.settingsJson, row);
             data.dtSeconds = facts.dtSeconds > 0d ? facts.dtSeconds : data.dtSeconds;
             ChunkFacts bound = facts;
+            long started = System.nanoTime();
             Extractors.extract(bound, data);
+            if (LOG.isDebugEnabled()) {
+                int samples = bound.ofType("profiler.WallClockSample").size()
+                        + bound.ofType("jdk.ExecutionSample").size()
+                        + bound.ofType("jdk.ObjectAllocationSample").size()
+                        + bound.ofType("jdk.JavaMonitorEnter").size();
+                LOG.debugf(
+                        "rollup %s events=%d samples=%d ms=%d",
+                        chunkId,
+                        bound.events.size(),
+                        samples,
+                        (System.nanoTime() - started) / 1_000_000L);
+            }
             data.derive = () -> Extractors.derive(bound, data);
         }
+        attachKnownJvm(row, data, facts);
         V2Store.CommitResult result = store.commit(chunkId, data);
         if (result.wrote() && committed != null) {
             committed.fire(new WindowCommitted(chunkId, result.jvmId(), data.fromMs, data.toMs, result.late()));
+        }
+    }
+
+    /**
+     * A chunk with no jdk.JVMInformation keeps the latest stored JVM for this container.
+     * It does not adopt the analyzer process JDK or open a new JVM at the chunk start.
+     */
+    private void attachKnownJvm(ChunkIndexRow row, WindowData data, ChunkFacts facts) throws IOException {
+        boolean missing = facts == null || !facts.sawJvmInformation;
+        if (!missing) {
+            if (data.jvmStartMs == 0L) {
+                data.jvmStartMs = data.fromMs;
+            }
+            return;
+        }
+        List<V2Store.JvmRow> prior = store.findJvms(
+                row.namespace(), row.podName(), row.containerName(), row.clusterId());
+        if (!prior.isEmpty()) {
+            V2Store.JvmRow latest = prior.get(prior.size() - 1);
+            data.jdkMajor = latest.jdkMajor();
+            if (latest.jdkVersion() != null && !latest.jdkVersion().isBlank()) {
+                data.jdkVersion = latest.jdkVersion();
+            }
+            data.jvmStartMs = latest.jvmStartMs();
+            if (facts == null) {
+                data.profile = latest.profile() == null ? "custom" : latest.profile();
+                if (latest.settings() != null && !latest.settings().isBlank()) {
+                    data.settingsJson = latest.settings();
+                }
+            }
+            return;
+        }
+        if (data.jvmStartMs == 0L) {
+            data.jvmStartMs = data.fromMs;
         }
     }
 
