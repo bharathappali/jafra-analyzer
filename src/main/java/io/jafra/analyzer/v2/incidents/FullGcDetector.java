@@ -87,7 +87,13 @@ public class FullGcDetector implements Detector {
                 }
             }
         }
-        int prior = prior(in);
+        int prior;
+        try {
+            prior = prior(in);
+        } catch (RuntimeException error) {
+            String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+            return WindowVerdict.unknown("gc.full.count history failed: " + message, Set.of());
+        }
         double value = inWindow + prior;
         Band band = new Band(1d, (double) criticalCount);
         String reason = "band 1 full GC / " + criticalCount + " in " + windows + " windows (proposal, pending KUSMA)";
@@ -96,11 +102,19 @@ public class FullGcDetector implements Detector {
         }
         State state = value >= criticalCount ? State.CRITICAL : State.WARNING;
         String cause = cause(longest);
+        boolean explicit = "System.gc()".equals(cause);
+        EventRow system = explicit ? systemGc(in) : null;
+        String frame = system == null || system.topFrame() == null || system.topFrame().isBlank() ? "unknown" : system.topFrame();
+        List<WhereFrame> where = explicit
+                ? List.of(new WhereFrame(frame, 100d, List.of("jdk.SystemGC")))
+                : AllocSites.where(in);
         List<String> todo = new ArrayList<>();
-        if ("System.gc()".equals(cause)) {
-            todo.add("remove the System.gc() call or add -XX:+DisableExplicitGC");
+        if (explicit) {
+            todo.add("remove the System.gc() call at " + frame + " or add -XX:+DisableExplicitGC");
         } else {
             todo.add(advice.todo(in.settings(), in.window()));
+            String site = where.isEmpty() ? "the top alloc frame" : where.get(0).frame();
+            todo.add("cut allocation at " + site);
         }
         long ms = longest == null || longest.durationUs() == null ? 0L : longest.durationUs() / 1000L;
         return new WindowVerdict(
@@ -112,7 +126,7 @@ public class FullGcDetector implements Detector {
                 family(),
                 reason,
                 new Who("site", cause.isBlank() ? collector : cause, null, false),
-                AllocSites.where(in),
+                where,
                 todo,
                 "The JVM stopped for a full GC of the whole heap (" + ms + " ms).",
                 "Full GC " + cause,
@@ -125,12 +139,8 @@ public class FullGcDetector implements Detector {
         if (history == null || in.jvm() == null || in.jvm().jvmId() <= 0) {
             return 0;
         }
-        try {
-            return (int) Math.round(history.sum(
-                    in.jvm().jvmId(), DetectorMetrics.GC_FULL_COUNT, "", "sum", windows - 1, in.fromMs() - 1));
-        } catch (RuntimeException error) {
-            return 0;
-        }
+        return (int) Math.round(history.sum(
+                in.jvm().jvmId(), DetectorMetrics.GC_FULL_COUNT, "", "sum", windows - 1, in.fromMs() - 1));
     }
 
     private static long duration(EventRow event) {
@@ -143,5 +153,10 @@ public class FullGcDetector implements Detector {
         }
         JsonNode fields = JsonFields.read(event.fields());
         return fields == null ? "" : fields.path("cause").asText("");
+    }
+
+    private static EventRow systemGc(WindowInput in) {
+        List<EventRow> calls = in.events().of("gc.system_gc");
+        return calls.isEmpty() ? null : calls.get(0);
     }
 }

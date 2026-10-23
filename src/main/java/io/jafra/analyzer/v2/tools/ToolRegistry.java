@@ -137,7 +137,7 @@ public class ToolRegistry {
         };
     }
 
-    private static ObjectNode jvmInfo(JvmRow jvm) {
+    static ObjectNode jvmInfo(JvmRow jvm) {
         ObjectNode stored;
         try {
             var parsed = JSON.readTree(jvm.settings() == null ? "{}" : jvm.settings());
@@ -158,6 +158,11 @@ public class ToolRegistry {
         k8s.put("namespace", jvm.namespace());
         k8s.put("pod", jvm.podName());
         k8s.put("container", jvm.containerName());
+        JsonNode heap = node.get("heap");
+        if (heap instanceof ObjectNode heapNode) {
+            heapNode.remove("xmx");
+            heapNode.remove("max_ram_percentage");
+        }
         return node;
     }
 

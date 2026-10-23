@@ -62,12 +62,16 @@ public class EvacPromotionFailureDetector implements Detector {
         JsonNode fields = JsonFields.read(first.fields());
         String objects = fields == null ? "0" : fields.path("object_count").asText("0");
         String bytes = fields == null ? "0" : fields.path("total_size_bytes").asText("0");
-        String collector = in.settings().oldCollector().isBlank() ? in.settings().youngCollector() : in.settings().oldCollector();
+        String collector = collector(in, fields);
+        List<WhereFrame> where = AllocSites.where(in);
         List<String> todo = new java.util.ArrayList<>();
         todo.add(advice.todo(in.settings(), in.window()));
         if (collector.startsWith("G1")) {
             String ihop = in.settings().argument("-XX:InitiatingHeapOccupancyPercent").orElse("adaptive IHOP");
             todo.add("start marking earlier: lower -XX:InitiatingHeapOccupancyPercent (now " + ihop + ") or raise -XX:G1ReservePercent");
+        } else if (isSerialOrParallel(collector)) {
+            String site = where.isEmpty() ? "the top alloc frame" : where.get(0).frame();
+            todo.add("reduce allocation at " + site);
         }
         return new WindowVerdict(
                 State.CRITICAL,
@@ -78,12 +82,32 @@ public class EvacPromotionFailureDetector implements Detector {
                 family(),
                 "band 1 failure (proposal, pending KUSMA)",
                 new Who("site", collector + " · " + objects + " objects, " + bytes + " failed to copy", null, false),
-                AllocSites.where(in),
+                where,
                 todo,
                 "The GC ran out of space to copy live objects, so the pause got much longer.",
                 "Evacuation or promotion failed",
                 List.of("jdk.EvacuationFailed", "jdk.PromotionFailed"),
                 Set.of(),
                 null);
+    }
+
+    private static String collector(WindowInput in, JsonNode fields) {
+        long gcId = fields == null ? -1L : fields.path("gc_id").asLong(-1L);
+        if (gcId >= 0L) {
+            for (EventRow pause : in.events().of("gc.pause")) {
+                JsonNode pauseFields = JsonFields.read(pause.fields());
+                if (pauseFields != null && pauseFields.path("gc_id").asLong(-2L) == gcId) {
+                    String name = pauseFields.path("collector").asText("");
+                    if (!name.isBlank()) {
+                        return name;
+                    }
+                }
+            }
+        }
+        return "unknown";
+    }
+
+    private static boolean isSerialOrParallel(String collector) {
+        return collector.contains("Serial") || collector.contains("Parallel") || "DefNew".equals(collector);
     }
 }
