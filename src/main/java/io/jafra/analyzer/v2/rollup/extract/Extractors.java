@@ -605,12 +605,13 @@ public final class Extractors {
             }
             out.add("gc.full.count", "", "", full);
         }
-        double cpuUs = 0;
+        double cpuSeconds = 0;
         for (Seen time : facts.ofType("jdk.GCCPUTime")) {
-            cpuUs += seconds(time.num("userTime"));
-            cpuUs += seconds(time.num("systemTime"));
+            // userTime/systemTime are contentType="nanos" (raw ns from RecordedObject.getValue), not microseconds.
+            cpuSeconds += nanosToSeconds(time.num("userTime"));
+            cpuSeconds += nanosToSeconds(time.num("systemTime"));
         }
-        out.gcCpuSeconds = cpuUs;
+        out.gcCpuSeconds = cpuSeconds;
         double copied = 0;
         for (Seen evac : facts.ofType("jdk.EvacuationInformation")) {
             Double bytes = evac.num("bytesCopied");
@@ -1651,14 +1652,11 @@ public final class Extractors {
         }
     }
 
-    private static double seconds(Double microsecondsOrNanos) {
-        if (microsecondsOrNanos == null) {
+    private static double nanosToSeconds(Double nanos) {
+        if (nanos == null || nanos < 0d) {
             return 0d;
         }
-        if (microsecondsOrNanos > 1e12d) {
-            return microsecondsOrNanos / 1e9d;
-        }
-        return microsecondsOrNanos / 1e6d;
+        return nanos / 1e9d;
     }
 
     private static Map<Long, Seen> index(ChunkFacts facts, String type, String field) {

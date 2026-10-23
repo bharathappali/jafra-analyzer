@@ -44,6 +44,34 @@ class GcDetectorsTest {
     }
 
     @Test
+    void gcCpuTimeIsReadAsNanoseconds() {
+        // jdk.GCCPUTime userTime/systemTime are raw nanoseconds: 8 ms + 2 ms of GC CPU in a 5 s window.
+        io.jafra.analyzer.v2.rollup.ChunkFacts facts = new io.jafra.analyzer.v2.rollup.ChunkFacts(
+                List.of(new io.jafra.analyzer.v2.rollup.Seen("jdk.GCCPUTime", 0, 1, "",
+                        Map.of("gcId", 1d, "userTime", 8_000_000d, "systemTime", 2_000_000d, "realTime", 1_137_000_000d),
+                        List.of())),
+                5, 0, 5_000, 25, "25", 0, "medium", "{}", Map.of(), 10);
+        io.jafra.analyzer.v2.rollup.WindowData out = new io.jafra.analyzer.v2.rollup.WindowData();
+        out.dtSeconds = 5;
+        io.jafra.analyzer.v2.rollup.extract.Extractors.extract(facts, out);
+        assertEquals(0.010d, out.gcCpuSeconds, 1e-9);
+    }
+
+    @Test
+    void gcOverheadTodoRoundsAndUsesTheShareOfTheLimit() {
+        // Live catalog-search window 11:07:40Z after the unit fix: gc.cpu.pct 21.14 (of used CPU), CPU at 1.89% of the limit.
+        GcOverheadDetector detector = new GcOverheadDetector(10, 25, advice);
+        WindowVerdict verdict = detector.evaluate(input(
+                "{\"gc\":{\"young\":\"G1New\",\"old\":\"G1Old\"},\"declared_event_types\":[\"jdk.GCCPUTime\"]}",
+                Map.of("gc.pause.time_pct", 22.719932095066905, "gc.cpu.pct", 21.14164904862266,
+                        "cpu.container.pct_limit", 1.88935490313589),
+                List.of()));
+        assertEquals(State.WARNING, verdict.state());
+        assertEquals(22.719932095066905, verdict.value(), 1e-9);
+        assertTrue(verdict.todo().contains("GC used 22.7% of wall time and 0.4% of the pod CPU limit"), verdict.todo().toString());
+    }
+
+    @Test
     void fullGcIgnoresG1OldAndCountsG1Full() {
         FullGcDetector detector = new FullGcDetector(3, 12, null, advice);
         String g1 = "{\"gc\":{\"young\":\"G1New\",\"old\":\"G1Old\"},\"jvm\":{\"arguments\":\"\"}}";

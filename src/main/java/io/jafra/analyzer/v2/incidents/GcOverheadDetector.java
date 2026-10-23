@@ -110,7 +110,7 @@ public class GcOverheadDetector implements Detector {
         if (occupancy != null && occupancy > 70d) {
             todo.add(advice.todo(in.settings(), in.window()));
         } else if (!where.isEmpty()) {
-            todo.add("cut allocation at " + where.get(0).frame() + " (" + where.get(0).sharePct() + "% of sampled bytes)");
+            todo.add("cut allocation at " + where.get(0).frame() + " (" + HeapSizeAdvice.number(where.get(0).sharePct()) + "% of sampled bytes)");
         }
         String cpuText = cpuShare == null ? "n/a" : String.format(java.util.Locale.ROOT, "%.1f", cpuShare);
         todo.add("GC used " + String.format(java.util.Locale.ROOT, "%.1f", pi) + "% of wall time and " + cpuText
