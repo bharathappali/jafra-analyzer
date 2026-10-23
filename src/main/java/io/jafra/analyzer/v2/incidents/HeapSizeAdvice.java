@@ -1,5 +1,6 @@
 package io.jafra.analyzer.v2.incidents;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -50,6 +51,41 @@ public class HeapSizeAdvice {
             return "raise -XX:MaxRAMPercentage from " + from + " (" + limit + ", heap max now " + bytes(heapMax) + ")";
         }
         return "raise -Xmx from " + bytes(heapMax);
+    }
+
+    /**
+     * Lower variant of {@link #todo}: same flag parsing, used by overcommitted_config.
+     * Target heap is 80% of the pod limit ({@code floor(80)}).
+     */
+    public List<String> lower(JvmSettings settings, RollupView window) {
+        JvmSettings resolved = settings == null ? new JvmSettings(null) : settings;
+        Double heapMax = positive(window, "heap.max.bytes", false);
+        if (heapMax == null) {
+            heapMax = resolved.heapMaxBytes();
+        }
+        Double podLimit = positive(window, "container.limit.bytes", false);
+        if (podLimit == null) {
+            podLimit = resolved.podMemoryLimitBytes();
+        }
+        boolean xmx = resolved.argument("-Xmx").isPresent() || resolved.argument("-XX:MaxHeapSize").isPresent();
+        String heapLine;
+        if (!xmx) {
+            Optional<String> percent = resolved.argument("-XX:MaxRAMPercentage");
+            String from = percent.isEmpty() ? "25" : number(parse(percent.get()));
+            heapLine = "lower -XX:MaxRAMPercentage from " + from + "% to ≤ 80% (heap ≤ " + bytes(scale(podLimit, 0.8)) + ")";
+        } else {
+            heapLine = "lower -Xmx from " + bytes(heapMax) + " to ≤ " + bytes(scale(podLimit, 0.8));
+        }
+        return List.of(
+                heapLine,
+                "or raise the pod memory limit from " + bytes(podLimit) + " to ≥ " + bytes(scale(heapMax, 1.25)));
+    }
+
+    private static Double scale(Double value, double factor) {
+        if (value == null || !Double.isFinite(value)) {
+            return null;
+        }
+        return value * factor;
     }
 
     /** GiB or MiB with one decimal. Smaller values use KiB, then bytes. */
