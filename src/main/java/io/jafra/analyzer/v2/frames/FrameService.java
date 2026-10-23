@@ -154,7 +154,7 @@ public class FrameService {
         }
     }
 
-    static boolean significant(long n1, double p1, long n2, double p2) {
+    public static boolean significant(long n1, double p1, long n2, double p2) {
         if (n1 < LOW_CONFIDENCE || n2 < LOW_CONFIDENCE) {
             return false;
         }

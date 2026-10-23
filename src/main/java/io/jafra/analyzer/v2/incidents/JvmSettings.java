@@ -93,6 +93,25 @@ public final class JvmSettings {
         return raw.path("gc").path("old").asText("");
     }
 
+    /** ContainerConfiguration.cpuQuota. Negative means no CPU limit. Null when unset. */
+    public Double cpuQuota() {
+        JsonNode node = raw.path("container").path("cpu_quota");
+        if (node.isMissingNode() || node.isNull() || !node.isNumber()) {
+            return null;
+        }
+        return node.asDouble();
+    }
+
+    public boolean hasCpuLimit() {
+        Double quota = cpuQuota();
+        return quota != null && quota >= 0d;
+    }
+
+    /** container.effective_cpus. Null when missing. */
+    public Double effectiveCpus() {
+        return positive(raw.path("container").path("effective_cpus"));
+    }
+
     private static JsonNode parse(String settings) {
         try {
             if (settings == null || settings.isBlank()) {
