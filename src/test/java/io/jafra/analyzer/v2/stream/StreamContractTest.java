@@ -49,12 +49,14 @@ class StreamContractTest {
                 .timeout(Duration.ofSeconds(8))
                 .header("Accept", "text/event-stream")
                 .header("Last-Event-ID", "0")
+                .header("Origin", "http://localhost:5173")
                 .GET()
                 .build();
         HttpResponse<java.io.InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         assertEquals(200, response.statusCode());
         assertEquals("no-cache", response.headers().firstValue("Cache-Control").orElse(""));
         assertEquals("no", response.headers().firstValue("X-Accel-Buffering").orElse(""));
+        assertEquals("*", response.headers().firstValue("Access-Control-Allow-Origin").orElse(""));
         byte[] buf = new byte[8192];
         StringBuilder text = new StringBuilder();
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();

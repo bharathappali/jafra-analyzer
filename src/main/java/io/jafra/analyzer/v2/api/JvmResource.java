@@ -290,6 +290,8 @@ public class JvmResource {
             @jakarta.ws.rs.core.Context jakarta.ws.rs.core.HttpHeaders headers) {
         http.putHeader("X-Accel-Buffering", "no");
         http.putHeader("Cache-Control", "no-cache");
+        http.putHeader(V2CorsFilter.ALLOW_ORIGIN, "*");
+        http.putHeader(V2CorsFilter.EXPOSE_HEADERS, "Retry-After");
         JvmRow jvm = jvms.resolve(namespace, pod, container, cluster, start);
         String lastEventId = headers.getHeaderString("Last-Event-ID");
         return Multi.createFrom().emitter(emitter -> {
