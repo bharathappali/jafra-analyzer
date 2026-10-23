@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import io.jafra.analyzer.v2.incidents.MethodTimingDelta;
 import io.jafra.analyzer.v2.incidents.support.FullGcClassifier;
 import io.jafra.analyzer.v2.rollup.ApSampling;
 import io.jafra.analyzer.v2.rollup.ChunkFacts;
@@ -22,12 +23,6 @@ import io.jafra.analyzer.v2.rollup.extract.internal.InternalExtractors;
  * Counter rates are cumulative samples; {@code RollupWriter} turns them into Δ/Δt and skips a drop.
  */
 public final class Extractors {
-    /**
-     * UNVERIFIED. true treats jdk.MethodTiming invocations as cumulative since instrumentation.
-     * A feasibility note preferred per-chunk counts; flip this if a recording shows per-period values.
-     */
-    public static final boolean METHOD_TIMING_CUMULATIVE = true;
-
     public static final Set<String> NAMES = Set.of(
             "cpu.used.cores",
             "cpu.user.cores",
@@ -792,12 +787,13 @@ public final class Extractors {
         }
         Map<String, Long> creators = new LinkedHashMap<>();
         Map<String, Long> sites = new LinkedHashMap<>();
-        for (Seen start : facts.ofType("jdk.ThreadStart")) {
+        List<Seen> starts = facts.ofType("jdk.ThreadStart");
+        for (Seen start : starts) {
             bump(creators, firstText(start, "parentThread"));
             bump(sites, Frames.firstApp(start.frames));
         }
         if (!creators.isEmpty() || !sites.isEmpty()) {
-            long total = facts.ofType("jdk.ThreadStart").size();
+            long total = starts.size();
             out.add("threads.created.count", "", "", total);
             flushCounts(out, "threads.created.count", "creator", creators);
             flushCounts(out, "threads.created.count", "site", sites);
@@ -974,14 +970,15 @@ public final class Extractors {
         Map<String, Long> methods = new LinkedHashMap<>();
         Map<String, Long> reasons = new LinkedHashMap<>();
         Map<String, Long> actions = new LinkedHashMap<>();
-        for (Seen deopt : facts.ofType("jdk.Deoptimization")) {
+        List<Seen> deopts = facts.ofType("jdk.Deoptimization");
+        for (Seen deopt : deopts) {
             bump(methods, deopt.text("method"));
             bump(reasons, deopt.text("reason"));
             bump(actions, deopt.text("action"));
         }
         double dt = out.dtSeconds > 0d ? out.dtSeconds : facts.dtSeconds;
         if (!methods.isEmpty() && dt > 0d) {
-            double perMin = 60d * facts.ofType("jdk.Deoptimization").size() / dt;
+            double perMin = 60d * deopts.size() / dt;
             out.add("jit.deopts.per_min", "", "", perMin);
             flushRates(out, "jit.deopts.per_min", "method", methods, dt / 60d);
             flushRates(out, "jit.deopts.per_min", "reason", reasons, dt / 60d);
@@ -1147,12 +1144,13 @@ public final class Extractors {
         }
         Map<String, Long> classes = new LinkedHashMap<>();
         Map<String, Long> sites = new LinkedHashMap<>();
-        for (Seen error : facts.ofType("jdk.JavaErrorThrow")) {
+        List<Seen> errors = facts.ofType("jdk.JavaErrorThrow");
+        for (Seen error : errors) {
             bump(classes, error.text("thrownClass"));
             bump(sites, Frames.firstApp(error.frames));
         }
         if (!classes.isEmpty()) {
-            out.add("exceptions.errors.count", "", "", facts.ofType("jdk.JavaErrorThrow").size());
+            out.add("exceptions.errors.count", "", "", errors.size());
             flushCounts(out, "exceptions.errors.count", "class", classes);
             flushCounts(out, "exceptions.errors.count", "site", sites);
         }
@@ -1178,7 +1176,7 @@ public final class Extractors {
         }
         if (!invocations.isEmpty()) {
             double total = invocations.values().stream().mapToDouble(Double::doubleValue).sum();
-            if (METHOD_TIMING_CUMULATIVE) {
+            if (MethodTimingDelta.cumulativeCounter()) {
                 out.counter("endpoint.calls.per_s", "", "", total);
                 for (Map.Entry<String, Double> entry : invocations.entrySet()) {
                     out.counter("endpoint.calls.per_s", "handler", "handler=" + entry.getKey(), entry.getValue());
@@ -1223,7 +1221,7 @@ public final class Extractors {
         }
         Map<String, Map<String, Long>> counts = new LinkedHashMap<>();
         for (Seen wall : facts.ofType("profiler.WallClockSample")) {
-            Seen call = enclosing(calls, wall);
+            Seen call = facts.enclosing("jdk.MethodTrace", wall);
             if (call == null) {
                 continue;
             }
@@ -1455,61 +1453,30 @@ public final class Extractors {
     }
 
     private static String handlerAt(ChunkFacts facts, Seen sample) {
-        Seen call = enclosing(facts.ofType("jdk.MethodTrace"), sample);
+        Seen call = facts.enclosing("jdk.MethodTrace", sample);
         return call == null ? "" : blank(call.text("method"));
-    }
-
-    private static Seen enclosing(List<Seen> calls, Seen sample) {
-        Seen found = null;
-        for (Seen call : calls) {
-            if (!call.thread.equals(sample.thread)) {
-                continue;
-            }
-            if (sample.startMs >= call.startMs && sample.startMs <= call.endMs) {
-                found = call;
-            }
-        }
-        return found;
     }
 
     private static String waitCause(ChunkFacts facts, Seen wall) {
         if ("running".equals(WallStates.classify(wall.text("state")))) {
             return "running";
         }
-        if (overlaps(facts, "jdk.SocketRead", wall) || overlaps(facts, "jdk.SocketWrite", wall)) {
+        if (facts.overlaps("jdk.SocketRead", wall) || facts.overlaps("jdk.SocketWrite", wall)) {
             return "socket";
         }
-        if (overlaps(facts, "jdk.JavaMonitorEnter", wall) || overlaps(facts, "jdk.ThreadPark", wall)) {
+        if (facts.overlaps("jdk.JavaMonitorEnter", wall) || facts.overlaps("jdk.ThreadPark", wall)) {
             return "lock";
         }
-        if (overlaps(facts, "jdk.GCPhasePause", wall)) {
+        if (facts.overlaps("jdk.GCPhasePause", wall)) {
             return "GC";
         }
         return "waiting";
     }
 
-    private static boolean overlaps(ChunkFacts facts, String type, Seen sample) {
-        for (Seen event : facts.ofType(type)) {
-            if (!event.thread.isBlank() && !event.thread.equals(sample.thread)) {
-                continue;
-            }
-            if (sample.startMs >= event.startMs && sample.startMs <= event.endMs) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static int[] wallSplit(ChunkFacts facts, Seen call) {
         int running = 0;
         int waiting = 0;
-        for (Seen wall : facts.ofType("profiler.WallClockSample")) {
-            if (!wall.thread.equals(call.thread)) {
-                continue;
-            }
-            if (wall.startMs < call.startMs || wall.startMs > call.endMs) {
-                continue;
-            }
+        for (Seen wall : facts.wallsBetween(call.thread, call.startMs, call.endMs)) {
             int weight = wall.num("samples") == null ? 1 : wall.num("samples").intValue();
             if ("running".equals(WallStates.classify(wall.text("state")))) {
                 running += weight;

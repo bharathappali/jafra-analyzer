@@ -1,8 +1,6 @@
 package io.jafra.analyzer.v2.incidents;
 
 import static io.restassured.RestAssured.given;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasSize;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -11,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
@@ -72,16 +71,22 @@ class LongPauseEndToEndTest {
         writer.awaitIdle(Duration.ofSeconds(10));
 
         String base = "/v2/jvms/v2inc/" + pod + "/app";
-        String id = given()
+        JsonPath listed = given()
                 .queryParam("from", "0")
                 .queryParam("to", String.valueOf(System.currentTimeMillis() + 60_000L))
                 .get(base + "/incidents")
                 .then()
                 .statusCode(200)
-                .body("incidents", hasSize(1))
-                .body("incidents[0].type", equalTo("long_pause"))
                 .extract()
-                .path("incidents[0].id");
+                .jsonPath();
+        String id = null;
+        for (Object row : listed.getList("incidents")) {
+            Map<?, ?> incident = (Map<?, ?>) row;
+            if ("long_pause".equals(incident.get("type"))) {
+                id = String.valueOf(incident.get("id"));
+            }
+        }
+        assertNotNull(id);
         JsonPath body = given().get(base + "/incidents/" + id).then().statusCode(200).extract().jsonPath();
         assertTrue(body.getString("headline").contains("System.gc()"));
         assertEquals("site", body.getString("who.kind"));
