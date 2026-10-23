@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.annotation.JsonNaming;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public record QueryResponse(
+        String metric,
         Double value,
         String unit,
         RangeWindow window,
@@ -23,11 +24,13 @@ public record QueryResponse(
         Double total,
         List<KeyedSeries> series) {
 
-    static QueryResponse scalar(double value, String unit, RangeWindow window, long n, List<String> flags, String stat) {
-        return new QueryResponse(value, unit, window, n, flags, stat, null, null, null, null, null, null, null);
+    static QueryResponse scalar(
+            String metric, double value, String unit, RangeWindow window, long n, List<String> flags, String stat) {
+        return new QueryResponse(metric, value, unit, window, n, flags, stat, null, null, null, null, null, null, null);
     }
 
     static QueryResponse series(
+            String metric,
             String unit,
             RangeWindow window,
             long n,
@@ -37,10 +40,11 @@ public record QueryResponse(
             List<QueryPoint> points,
             QuerySummary summary,
             String ignored) {
-        return new QueryResponse(null, unit, window, n, flags, stat, stepUsed, points, summary, null, null, null, null);
+        return new QueryResponse(metric, null, unit, window, n, flags, stat, stepUsed, points, summary, null, null, null, null);
     }
 
     static QueryResponse breakdown(
+            String metric,
             String unit,
             RangeWindow window,
             long n,
@@ -49,10 +53,11 @@ public record QueryResponse(
             List<BreakdownRow> rows,
             double otherPct,
             double total) {
-        return new QueryResponse(null, unit, window, n, flags, stat, null, null, null, rows, otherPct, total, null);
+        return new QueryResponse(metric, null, unit, window, n, flags, stat, null, null, null, rows, otherPct, total, null);
     }
 
     static QueryResponse byStep(
+            String metric,
             String unit,
             RangeWindow window,
             long n,
@@ -60,7 +65,7 @@ public record QueryResponse(
             String stat,
             String stepUsed,
             List<KeyedSeries> series) {
-        return new QueryResponse(null, unit, window, n, flags, stat, stepUsed, null, null, null, null, null, series);
+        return new QueryResponse(metric, null, unit, window, n, flags, stat, stepUsed, null, null, null, null, null, series);
     }
 }
 
@@ -70,7 +75,7 @@ record RangeWindow(String from, String to, String step) {}
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-record QueryPoint(String t, double v) {}
+record QueryPoint(long t, double v) {}
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)

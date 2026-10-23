@@ -16,7 +16,7 @@ class ErrorBodyTest {
                 V2Exception.unsupportedBy("no", List.of("class")),
                 V2Exception.notOnJdk("needs JDK 25"),
                 V2Exception.nmtOff(),
-                V2Exception.noData("none", "1970-01-01T00:00:00Z"),
+                V2Exception.noData("none", List.of("1970-01-01T00:00:00.000Z", "1970-01-01T00:00:05.000Z")),
                 V2Exception.notEnough(3),
                 V2Exception.unknownIncident(List.of("a")),
                 V2Exception.badRange("from must be earlier than to"),

@@ -4,6 +4,10 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.emptyOrNullString;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 
 import org.junit.jupiter.api.Test;
 
@@ -46,6 +50,7 @@ class SurfaceResourceTest {
                 .statusCode(200)
                 .body("charts", hasSize(37))
                 .body("charts.find { it.id == 'cpu-limit' }.availability", equalTo("available"))
+                .body("charts.find { it.id == 'heap-used' }.note", not(emptyOrNullString()))
                 .body("charts.find { it.id == 'endpoints-time' }.availability", equalTo("not_on_this_jdk"))
                 .body("charts.find { it.id == 'nmt' }.availability", equalTo("nmt_off"));
 
@@ -58,9 +63,13 @@ class SurfaceResourceTest {
                 .then()
                 .statusCode(200)
                 .body("view", equalTo("not-a-view"))
-                .body("metrics", hasSize(4))
-                .body("metrics.find { it.name == 'heap.used.pct_max' }.points", hasSize(1))
-                .body("metrics.find { it.name == 'heap.used.pct_max' }.points[0].t", equalTo(5000));
+                .body("series", hasSize(4))
+                .body("series.find { it.metric == 'heap.used.pct_max' }.stat", equalTo("avg"))
+                .body("series.find { it.metric == 'heap.used.pct_max' }.points", hasSize(1))
+                .body("series.find { it.metric == 'heap.used.pct_max' }.points[0][0]", equalTo(5000))
+                .body("flags", notNullValue())
+                .body("summary.'heap.used.pct_max'.last", equalTo(80f))
+                .body("flame", nullValue());
 
         given()
                 .queryParam("from", "0")
@@ -85,8 +94,9 @@ class SurfaceResourceTest {
                 .get("/v2/workloads")
                 .then()
                 .statusCode(200)
-                .body("workloads.findAll { it.pod == '" + pod + "' }", hasSize(1))
-                .body("workloads.find { it.pod == '" + pod + "' }.namespace", equalTo("v2surf"));
+                .body("findAll { it.pod == '" + pod + "' }", hasSize(1))
+                .body("find { it.pod == '" + pod + "' }.ns", equalTo("v2surf"))
+                .body("find { it.pod == '" + pod + "' }.jvms[0].windows", equalTo(2));
     }
 
     private static WindowData window(String pod, long from, double heapPct) {

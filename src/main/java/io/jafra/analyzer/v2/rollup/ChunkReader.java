@@ -94,7 +94,7 @@ public final class ChunkReader {
         }
         Duration duration = event.getDuration();
         if (duration != null && !duration.isNegative()) {
-            values.putIfAbsent("duration", duration.toNanos() / 1000d);
+            values.put("duration", duration.toNanos() / 1000d);
         }
         Instant start = event.getStartTime();
         long startMs = start == null ? 0L : start.toEpochMilli();

@@ -127,6 +127,7 @@ public class QueryService {
         }
         Acc acc = acc(rows);
         return QueryResponse.scalar(
+                metric.name(),
                 statValue(acc, stat),
                 metric.unit(),
                 window(range, null),
@@ -155,6 +156,7 @@ public class QueryService {
         List<QueryPoint> points = points(rows, used, stat);
         long n = rows.stream().mapToLong(RollupRow::count).sum();
         return QueryResponse.series(
+                metric.name(),
                 metric.unit(),
                 window(range, nameOf(used)),
                 n,
@@ -199,7 +201,7 @@ public class QueryService {
             n++;
         }
         double other = grand == 0d ? 0d : 100d * (grand - shown) / grand;
-        return QueryResponse.breakdown(metric.unit(), window(range, null), samples, flags, stat, out, other, grand);
+        return QueryResponse.breakdown(metric.name(), metric.unit(), window(range, null), samples, flags, stat, out, other, grand);
     }
 
     private QueryResponse byStep(
@@ -232,7 +234,7 @@ public class QueryService {
             series.add(new KeyedSeries(key, points(matching, used, stat)));
         }
         return QueryResponse.byStep(
-                metric.unit(), window(range, nameOf(used)), samples, flags, stat, nameOf(used), series);
+                metric.name(), metric.unit(), window(range, nameOf(used)), samples, flags, stat, nameOf(used), series);
     }
 
     private QueryResponse percentile(
@@ -253,7 +255,7 @@ public class QueryService {
         };
         long n = buckets.values().stream().mapToLong(Long::longValue).sum();
         double value = LogHistogram.percentile(buckets, q, min, max);
-        return QueryResponse.scalar(value, metric.unit(), window(range, null), n, flags, stat);
+        return QueryResponse.scalar(metric.name(), value, metric.unit(), window(range, null), n, flags, stat);
     }
 
     private List<RollupRow> rows(
@@ -279,7 +281,7 @@ public class QueryService {
         }
         List<QueryPoint> points = new ArrayList<>();
         for (Map.Entry<Long, Acc> entry : buckets.entrySet()) {
-            points.add(new QueryPoint(V2Times.text(entry.getKey()), statValue(entry.getValue(), stat)));
+            points.add(new QueryPoint(entry.getKey(), statValue(entry.getValue(), stat)));
         }
         return points;
     }
@@ -290,8 +292,8 @@ public class QueryService {
         }
         double min = Double.POSITIVE_INFINITY;
         double max = Double.NEGATIVE_INFINITY;
-        String minAt = points.get(0).t();
-        String maxAt = points.get(0).t();
+        long minAt = points.get(0).t();
+        long maxAt = points.get(0).t();
         List<Double> values = new ArrayList<>();
         for (QueryPoint point : points) {
             values.add(point.v());
@@ -312,12 +314,16 @@ public class QueryService {
         } else {
             median = (values.get(size / 2 - 1) + values.get(size / 2)) / 2d;
         }
-        return new QuerySummary(points.get(0).v(), points.get(points.size() - 1).v(), min, minAt, max, maxAt, median);
+        return new QuerySummary(
+                points.get(0).v(), points.get(points.size() - 1).v(), min, V2Times.text(minAt), max, V2Times.text(maxAt), median);
     }
 
     private V2Exception noData(JvmRow jvm, String metric, long around) throws IOException {
-        Long nearest = store.nearestTs(jvm.jvmId(), metric, around);
-        return V2Exception.noData("no data in this range", nearest == null ? null : V2Times.text(nearest));
+        long[] span = store.nearestWindow(jvm.jvmId(), metric, around);
+        if (span == null) {
+            return V2Exception.noData("no data in this range", List.of());
+        }
+        return V2Exception.noData("no data in this range", List.of(V2Times.text(span[0]), V2Times.text(span[1])));
     }
 
     public static long parseStep(String step) {

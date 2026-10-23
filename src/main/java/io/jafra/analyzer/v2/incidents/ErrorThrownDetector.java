@@ -50,7 +50,7 @@ public class ErrorThrownDetector implements Detector {
         String frame = hit.topFrame() == null ? "unknown" : hit.topFrame();
         String reason = DetectorSupport.band(stack ? "StackOverflowError" : "any other Error");
         if (capped) reason += "; error events capped at 200 per window";
-        return Verdicts.of(stack ? State.CRITICAL : State.WARNING, 1d, "count", null, new Band(null, stack ? 1d : null), family(), reason,
+        return Verdicts.of(stack ? State.CRITICAL : State.WARNING, 1d, "count", null, new Band(stack ? null : 1d, stack ? 1d : null), family(), reason,
                 new Who("class", type + ": " + message, null, false),
                 List.of(new WhereFrame(frame, 100d, List.of("jdk.JavaErrorThrow"))),
                 List.of(stack ? "find the repeating frame " + frame + " (recursion)" : "check " + type),

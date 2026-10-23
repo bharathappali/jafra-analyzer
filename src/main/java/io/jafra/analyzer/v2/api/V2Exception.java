@@ -54,8 +54,8 @@ public final class V2Exception extends RuntimeException {
                 List.of());
     }
 
-    public static V2Exception noData(String message, String nearest) {
-        return new V2Exception(404, "no_data", message, "try the nearest time that has data", nearest == null ? List.of() : List.of(nearest));
+    public static V2Exception noData(String message, List<String> valid) {
+        return new V2Exception(404, "no_data", message, "try the nearest time that has data", valid == null ? List.of() : valid);
     }
 
     public static V2Exception notEnough(int n) {

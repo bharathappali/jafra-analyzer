@@ -31,6 +31,8 @@ public class V2ReadFilter {
         }
         return Response.status(503)
                 .header("Retry-After", "30")
+                .header(V2CorsFilter.ALLOW_ORIGIN, "*")
+                .header(V2CorsFilter.EXPOSE_HEADERS, "Retry-After")
                 .type(MediaType.APPLICATION_JSON)
                 .entity(V2Exception.notReady().body())
                 .build();

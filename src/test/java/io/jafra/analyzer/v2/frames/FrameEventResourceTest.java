@@ -2,8 +2,10 @@ package io.jafra.analyzer.v2.frames;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -117,7 +119,7 @@ class FrameEventResourceTest {
                 .statusCode(200)
                 .body("paths", hasSize(1))
                 .body("paths[0].frames.size()", org.hamcrest.Matchers.lessThanOrEqualTo(8))
-                .body("paths[0].frames.name", hasItem(caller));
+                .body("paths[0].frames", hasItem(caller));
 
         given()
                 .queryParam("kind", "cpu")
@@ -128,7 +130,7 @@ class FrameEventResourceTest {
                 .then()
                 .statusCode(200)
                 .body("frames.find { it.frame == '" + leaf + "' }.significant", equalTo(true))
-                .body("frames.find { it.frame == '" + leaf + "' }.vs_share_pct", equalTo(0f))
+                .body("frames.find { it.frame == '" + leaf + "' }.share_a", greaterThan(0f))
                 .body("frames.find { it.frame == '" + leaf + "' }.share_b", equalTo(0f))
                 .body("frames.find { it.frame == '" + leaf + "' }.delta", org.hamcrest.Matchers.notNullValue());
 
@@ -162,7 +164,9 @@ class FrameEventResourceTest {
                 .then()
                 .statusCode(200)
                 .body("events", hasSize(1))
-                .body("events[0].fields.message", equalTo("Nope"));
+                .body("events[0].message", equalTo("Nope"))
+                .body("type", equalTo("error"))
+                .body("flags", hasSize(0));
 
         given()
                 .queryParam("type", "gc.system_gc")
@@ -180,7 +184,7 @@ class FrameEventResourceTest {
                 .get(base + "/events")
                 .then()
                 .statusCode(200)
-                .body("events[0].fields.pause_us", equalTo(9000));
+                .body("events[0].pause_us", equalTo(9000));
 
         given()
                 .queryParam("type", "not-an-event")
@@ -190,6 +194,54 @@ class FrameEventResourceTest {
                 .then()
                 .statusCode(400)
                 .body("valid", hasSize(19));
+    }
+
+    @Test
+    void repeatedFrameIsCountedOncePerStack() throws Exception {
+        String pod = "pod-" + System.nanoTime();
+        String leaf = "com.app.Recurse.m";
+        WindowData data = window(pod, 0L);
+        data.stack(91L, frames(leaf, "app", leaf, "app", "com.app.Caller.run", "app"));
+        data.sample("cpu", 91L, "main", "", "", 100, 100);
+        writer.commitSynthetic("frame-repeat-" + pod, data);
+
+        given()
+                .queryParam("kind", "cpu")
+                .queryParam("from", "0")
+                .queryParam("to", "5000")
+                .get("/v2/jvms/v2frame/" + pod + "/app/frames")
+                .then()
+                .statusCode(200)
+                .body("unit", equalTo("samples"))
+                .body("total", equalTo(100f))
+                .body("frames.find { it.frame == '" + leaf + "' }.total_pct", lessThanOrEqualTo(100f))
+                .body("frames.find { it.frame == '" + leaf + "' }.self_pct", lessThanOrEqualTo(100f))
+                .body("frames.collect { it.self_pct }.sum()", lessThanOrEqualTo(100.01d));
+    }
+
+    @Test
+    void eventRowsAreFlatAndTruncationIsFlagged() throws Exception {
+        String pod = "pod-" + System.nanoTime();
+        WindowData data = window(pod, 0L);
+        for (int i = 0; i < 21; i++) {
+            data.event(new WindowData.StoredEvent(
+                    "error", 1_000L + i, 10L, "main", "com.app.E.m", null, "{\"message\":\"x\"}"));
+        }
+        writer.commitSynthetic("events-" + pod, data);
+
+        given()
+                .queryParam("type", "error")
+                .queryParam("from", "0")
+                .queryParam("to", "5000")
+                .get("/v2/jvms/v2frame/" + pod + "/app/events")
+                .then()
+                .statusCode(200)
+                .body("type", equalTo("error"))
+                .body("events", hasSize(20))
+                .body("flags", hasItem("truncated"))
+                .body("events[0].t", equalTo("1970-01-01T00:00:01.020Z"))
+                .body("events[0].message", equalTo("x"))
+                .body("events[0].fields", org.hamcrest.Matchers.nullValue());
     }
 
     private static String frames(String... nameAndCategory) {

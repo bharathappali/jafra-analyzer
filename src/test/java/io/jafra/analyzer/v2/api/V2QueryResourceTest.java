@@ -71,6 +71,7 @@ class V2QueryResourceTest {
                 .then()
                 .statusCode(200)
                 .body("value", equalTo(99f))
+                .body("metric", equalTo("heap.used.bytes"))
                 .body("unit", equalTo("bytes"))
                 .body("window.from", notNullValue());
 
@@ -123,6 +124,30 @@ class V2QueryResourceTest {
                 .body("error", equalTo("unsupported_by"));
 
         given()
+                .queryParam("metric", "threads.live.count")
+                .queryParam("by", "pool")
+                .queryParam("from", "0")
+                .queryParam("to", "5000")
+                .get("/v2/jvms/" + ns + "/" + pod + "/app/query")
+                .then()
+                .statusCode(400)
+                .body("error", equalTo("unsupported_by"))
+                .body("valid", hasSize(0));
+
+        given()
+                .queryParam("metric", "locks.wait.ms_per_s")
+                .queryParam("by", "pool")
+                .queryParam("from", "0")
+                .queryParam("to", "5000")
+                .get("/v2/jvms/" + ns + "/" + pod + "/app/query")
+                .then()
+                .statusCode(400)
+                .body("error", equalTo("unsupported_by"))
+                .body("valid", hasSize(2))
+                .body("valid[0]", equalTo("monitor"))
+                .body("valid[1]", equalTo("thread"));
+
+        given()
                 .queryParam("metric", "endpoint.slow.pct")
                 .queryParam("from", "1000000")
                 .queryParam("to", "1005000")
@@ -150,7 +175,9 @@ class V2QueryResourceTest {
                 .then()
                 .statusCode(404)
                 .body("error", equalTo("no_data"))
-                .body("valid", hasSize(1));
+                .body("valid", hasSize(2))
+                .body("valid[0]", equalTo("1970-01-01T00:16:40.000Z"))
+                .body("valid[1]", equalTo("1970-01-01T00:16:45.000Z"));
 
         given()
                 .queryParam("metric", "heap.used.bytes")
@@ -170,6 +197,9 @@ class V2QueryResourceTest {
                 .then()
                 .statusCode(200)
                 .body("step_used", equalTo("10s"))
+                .body("metric", equalTo("heap.used.bytes"))
+                .body("points[0].t", org.hamcrest.Matchers.instanceOf(Integer.class))
+                .body("summary.min_at", org.hamcrest.Matchers.startsWith("1970-01-01T"))
                 .body("points.size()", lessThanOrEqualTo(60))
                 .body("summary.min", notNullValue())
                 .extract()

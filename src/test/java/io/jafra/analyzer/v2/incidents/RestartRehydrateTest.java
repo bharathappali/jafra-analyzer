@@ -74,7 +74,7 @@ class RestartRehydrateTest {
                 List.of(new LongPauseDetector(200, 1000, 85, new HeapSizeAdvice(90))),
                 null,
                 baselines,
-                new SurfaceService(store, catalogue, baselines));
+                new SurfaceService(store, catalogue, baselines, null, null));
     }
 
     private static CommitResult commit(V2Store store, long fromMs) throws Exception {

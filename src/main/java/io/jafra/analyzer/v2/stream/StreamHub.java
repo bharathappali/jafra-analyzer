@@ -1,7 +1,10 @@
 package io.jafra.analyzer.v2.stream;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -33,6 +36,8 @@ public class StreamHub {
     private final V2Store store;
     private final SurfaceService surface;
     private final CopyOnWriteArrayList<Subscription> subscriptions = new CopyOnWriteArrayList<>();
+    private final ConcurrentHashMap<Integer, Deque<Buffered>> recent = new ConcurrentHashMap<>();
+    private static final int RECENT_CAP = 64;
     private Sse sse;
 
     @Inject
@@ -41,10 +46,11 @@ public class StreamHub {
         this.surface = surface;
     }
 
-    public Subscription subscribe(JvmRow jvm, MultiEmitter<? super OutboundSseEvent> emitter, Sse sse) {
+    public Subscription subscribe(JvmRow jvm, MultiEmitter<? super OutboundSseEvent> emitter, Sse sse, String lastEventId) {
         this.sse = sse;
         Subscription subscription = new Subscription(jvm, emitter);
         subscriptions.add(subscription);
+        replay(subscription, lastEventId);
         return subscription;
     }
 
@@ -57,9 +63,6 @@ public class StreamHub {
     }
 
     void onWindow(@Observes WindowAssessed assessed) {
-        if (sse == null || subscriptions.isEmpty()) {
-            return;
-        }
         try {
             JvmRow jvm = store.jvm(assessed.jvmId());
             if (jvm == null) {
@@ -67,10 +70,12 @@ public class StreamHub {
             }
             ObjectNode data = JSON.createObjectNode();
             ObjectNode identity = data.putObject("jvm");
-            identity.put("namespace", jvm.namespace());
+            identity.put("cluster", jvm.clusterId());
+            identity.put("ns", jvm.namespace());
             identity.put("pod", jvm.podName());
             identity.put("container", jvm.containerName());
             identity.put("start", V2Times.text(jvm.jvmStartMs()));
+            identity.put("jdk", jvm.jdkMajor());
             ObjectNode window = data.putObject("window");
             window.put("from", V2Times.text(assessed.fromMs()));
             window.put("to", V2Times.text(assessed.toMs()));
@@ -82,7 +87,10 @@ public class StreamHub {
             }
             data.set("opened", incidents(assessed.opened(), false));
             data.set("closed", incidents(assessed.closed(), true));
-            emit(jvm.jvmId(), "window", data.toString());
+            remember(jvm.jvmId(), assessed.fromMs(), data.toString());
+            if (sse != null && !subscriptions.isEmpty()) {
+                emit(jvm.jvmId(), "window", Long.toString(assessed.fromMs()), data.toString());
+            }
         } catch (RuntimeException | java.io.IOException error) {
             LOG.warn("skipped a window event", error);
         }
@@ -95,7 +103,7 @@ public class StreamHub {
         }
         ObjectNode data = JSON.createObjectNode().put("t", V2Times.text(java.time.Instant.now()));
         for (Subscription subscription : subscriptions) {
-            send(subscription, "heartbeat", data.toString());
+            send(subscription, "heartbeat", null, data.toString());
         }
     }
 
@@ -121,22 +129,63 @@ public class StreamHub {
         return array;
     }
 
-    private void emit(int jvmId, String name, String data) {
+    private void emit(int jvmId, String name, String id, String data) {
         for (Subscription subscription : subscriptions) {
             if (subscription.jvm.jvmId() == jvmId) {
-                send(subscription, name, data);
+                send(subscription, name, id, data);
             }
         }
     }
 
-    private void send(Subscription subscription, String name, String data) {
+    private void remember(int jvmId, long id, String data) {
+        Deque<Buffered> deque = recent.computeIfAbsent(jvmId, ignored -> new ArrayDeque<>());
+        synchronized (deque) {
+            deque.addLast(new Buffered(id, data));
+            while (deque.size() > RECENT_CAP) {
+                deque.removeFirst();
+            }
+        }
+    }
+
+    private void replay(Subscription subscription, String lastEventId) {
+        if (lastEventId == null || lastEventId.isBlank()) {
+            return;
+        }
+        long after;
+        try {
+            after = Long.parseLong(lastEventId.trim());
+        } catch (NumberFormatException ignored) {
+            return;
+        }
+        Deque<Buffered> deque = recent.get(subscription.jvm.jvmId());
+        if (deque == null) {
+            return;
+        }
+        List<Buffered> copy;
+        synchronized (deque) {
+            copy = List.copyOf(deque);
+        }
+        for (Buffered event : copy) {
+            if (event.id > after) {
+                send(subscription, "window", Long.toString(event.id), event.data);
+            }
+        }
+    }
+
+    private void send(Subscription subscription, String name, String id, String data) {
         if (sse == null || subscription.emitter.isCancelled()) {
             unsubscribe(subscription);
             return;
         }
         try {
-            OutboundSseEvent event = sse.newEventBuilder().name(name).mediaType(jakarta.ws.rs.core.MediaType.APPLICATION_JSON_TYPE).data(data).build();
-            subscription.emitter.emit(event);
+            OutboundSseEvent.Builder builder = sse.newEventBuilder()
+                    .name(name)
+                    .mediaType(jakarta.ws.rs.core.MediaType.APPLICATION_JSON_TYPE)
+                    .data(data);
+            if (id != null) {
+                builder.id(id);
+            }
+            subscription.emitter.emit(builder.build());
         } catch (RuntimeException error) {
             unsubscribe(subscription);
         }
@@ -151,4 +200,6 @@ public class StreamHub {
             this.emitter = emitter;
         }
     }
+
+    private record Buffered(long id, String data) {}
 }

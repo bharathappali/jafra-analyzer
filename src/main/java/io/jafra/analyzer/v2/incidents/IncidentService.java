@@ -153,7 +153,7 @@ public class IncidentService {
             node.put("t1", V2Times.text(row.t1()));
         }
         node.put("peak_at", V2Times.text(row.peakAt()));
-        node.set("when", tree(row.whenJson()));
+        node.set("when", when(row));
         node.set("how_bad", tree(row.howBadJson()));
         node.set("together", tree(row.togetherJson()));
         node.set("who", tree(row.whoJson()));
@@ -161,6 +161,14 @@ public class IncidentService {
         node.set("todo", tree(row.todoJson()));
         node.set("sources", tree(row.sourcesJson()));
         node.set("flags", tree(row.flagsJson()));
+        return node;
+    }
+
+    private static JsonNode when(IncidentRecord row) {
+        JsonNode stored = tree(row.whenJson());
+        ObjectNode node = stored instanceof ObjectNode object ? object : JSON.createObjectNode();
+        long end = row.t1() == null ? System.currentTimeMillis() : row.t1();
+        node.put("duration_s", (end - row.t0()) / 1000d);
         return node;
     }
 

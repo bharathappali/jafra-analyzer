@@ -137,11 +137,13 @@ public class JvmResource {
             @QueryParam("start") String start,
             @QueryParam("view") String view,
             @QueryParam("since") String since,
+            @QueryParam("step") String step,
+            @QueryParam("kind") String kind,
             @QueryParam("last") String last,
             @QueryParam("from") String from,
             @QueryParam("to") String to) {
         return surface.chart(
-                jvms.resolve(namespace, pod, container, cluster, start), chartId, view, since, last, from, to);
+                jvms.resolve(namespace, pod, container, cluster, start), chartId, view, since, step, kind, last, from, to);
     }
 
     @GET
@@ -266,11 +268,14 @@ public class JvmResource {
             @QueryParam("cluster") String cluster,
             @QueryParam("start") String start,
             @jakarta.ws.rs.core.Context Sse sse,
-            @jakarta.ws.rs.core.Context io.vertx.core.http.HttpServerResponse http) {
+            @jakarta.ws.rs.core.Context io.vertx.core.http.HttpServerResponse http,
+            @jakarta.ws.rs.core.Context jakarta.ws.rs.core.HttpHeaders headers) {
         http.putHeader("X-Accel-Buffering", "no");
+        http.putHeader("Cache-Control", "no-cache");
         JvmRow jvm = jvms.resolve(namespace, pod, container, cluster, start);
+        String lastEventId = headers.getHeaderString("Last-Event-ID");
         return Multi.createFrom().emitter(emitter -> {
-            StreamHub.Subscription subscription = streams.subscribe(jvm, emitter, sse);
+            StreamHub.Subscription subscription = streams.subscribe(jvm, emitter, sse, lastEventId);
             emitter.onTermination(() -> streams.unsubscribe(subscription));
         });
     }

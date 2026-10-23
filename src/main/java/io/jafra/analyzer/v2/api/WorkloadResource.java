@@ -1,5 +1,7 @@
 package io.jafra.analyzer.v2.api;
 
+import java.util.List;
+
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -22,7 +24,7 @@ public class WorkloadResource {
 
     @GET
     @Blocking
-    public SurfaceService.WorkloadList list(@QueryParam("cluster") String cluster) {
+    public List<SurfaceService.ContainerWorkload> list(@QueryParam("cluster") String cluster) {
         return surface.workloads(cluster);
     }
 }

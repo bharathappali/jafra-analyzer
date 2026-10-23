@@ -75,25 +75,30 @@ public class TrendService {
             }
             Limit limit = limit(jvm, metric, range);
             TrendMath.Result result = TrendMath.assess(times, values, limit.value);
+            long spanS = times.length == 0 ? 0L : (times[times.length - 1] - times[0]) / 1000L;
+            double current = values.length == 0 ? 0d : values[values.length - 1];
+            List<String> flags = metric.flags() == null ? List.of() : metric.flags();
             return new Trend(
                     metric.name(),
                     metric.unit(),
                     new TimeWindow(V2Times.text(range.from()), V2Times.text(range.to())),
-                    result.n(),
-                    result.slopePerHour(),
-                    result.slopeLow(),
-                    result.slopeHigh(),
-                    result.mkP(),
-                    result.significant(),
-                    result.shape(),
+                    current,
                     limit.value,
                     limit.source,
+                    result.slopePerHour(),
+                    new SlopeCi(result.slopeLow(), result.slopeHigh()),
+                    result.mkP(),
+                    result.significant(),
                     result.timeToLimitMin() == null
                             ? null
                             : new TimeToLimit(
                                     result.timeToLimitMin().low(),
                                     result.timeToLimitMin().mid(),
-                                    result.timeToLimitMin().high()));
+                                    result.timeToLimitMin().high()),
+                    result.shape(),
+                    result.n(),
+                    spanS,
+                    flags);
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
@@ -216,18 +221,24 @@ public class TrendService {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
+    public record SlopeCi(double lo, double hi) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Trend(
             String metric,
             String unit,
             TimeWindow window,
-            int n,
-            double slopePerHour,
-            double slopeLow,
-            double slopeHigh,
-            double mkP,
-            boolean significant,
-            String shape,
+            double current,
             Double limit,
             String limitSource,
-            TimeToLimit timeToLimit) {}
+            double slopePerH,
+            SlopeCi slopeCi95,
+            double mkP,
+            boolean significant,
+            TimeToLimit timeToLimit,
+            String shape,
+            int n,
+            long spanS,
+            List<String> flags) {}
 }

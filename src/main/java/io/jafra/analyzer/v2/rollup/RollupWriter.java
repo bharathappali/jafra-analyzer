@@ -236,34 +236,29 @@ public class RollupWriter {
         }
     }
 
-    /**
-     * A chunk with no jdk.JVMInformation keeps the latest stored JVM for this container.
-     * It does not adopt the analyzer process JDK or open a new JVM at the chunk start.
-     */
     private void attachKnownJvm(ChunkIndexRow row, WindowData data, ChunkFacts facts) throws IOException {
         boolean missing = facts == null || !facts.sawJvmInformation;
-        if (!missing) {
-            if (data.jvmStartMs == 0L) {
-                data.jvmStartMs = data.fromMs;
-            }
-            return;
-        }
         List<V2Store.JvmRow> prior = store.findJvms(
                 row.namespace(), row.podName(), row.containerName(), row.clusterId());
         if (!prior.isEmpty()) {
             V2Store.JvmRow latest = prior.get(prior.size() - 1);
-            data.jdkMajor = latest.jdkMajor();
-            if (latest.jdkVersion() != null && !latest.jdkVersion().isBlank()) {
-                data.jdkVersion = latest.jdkVersion();
+            if (data.jdkMajor == 0) {
+                data.jdkMajor = latest.jdkMajor();
             }
-            data.jvmStartMs = latest.jvmStartMs();
-            if (facts == null) {
-                data.profile = latest.profile() == null ? "custom" : latest.profile();
-                if (latest.settings() != null && !latest.settings().isBlank()) {
-                    data.settingsJson = latest.settings();
+            if (data.jdkVersion == null || data.jdkVersion.isBlank()) {
+                if (latest.jdkVersion() != null && !latest.jdkVersion().isBlank()) {
+                    data.jdkVersion = latest.jdkVersion();
                 }
             }
-            return;
+            if (data.jvmStartMs == 0L) {
+                data.jvmStartMs = latest.jvmStartMs();
+            }
+            if (missing && (data.profile == null || data.profile.isBlank() || "custom".equals(data.profile))) {
+                if (latest.profile() != null && !latest.profile().isBlank()) {
+                    data.profile = latest.profile();
+                }
+            }
+            data.settingsJson = SettingsMerge.merge(latest.settings(), data.settingsJson);
         }
         if (data.jvmStartMs == 0L) {
             data.jvmStartMs = data.fromMs;

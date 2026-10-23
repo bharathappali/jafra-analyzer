@@ -113,8 +113,9 @@ public class FullGcDetector implements Detector {
             todo.add("remove the System.gc() call at " + frame + " or add -XX:+DisableExplicitGC");
         } else {
             todo.add(advice.todo(in.settings(), in.window()));
-            String site = where.isEmpty() ? "the top alloc frame" : where.get(0).frame();
-            todo.add("cut allocation at " + site);
+            if (!where.isEmpty()) {
+                todo.add("cut allocation at " + where.get(0).frame());
+            }
         }
         long ms = longest == null || longest.durationUs() == null ? 0L : longest.durationUs() / 1000L;
         return new WindowVerdict(

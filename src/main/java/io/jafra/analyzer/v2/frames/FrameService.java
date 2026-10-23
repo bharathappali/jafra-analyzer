@@ -4,9 +4,11 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -126,9 +128,11 @@ public class FrameService {
         try {
             List<Weighted> stacks = stacks(jvm, spec.kind(), range, thread, state, blank(endpoint));
             long n = stacks.stream().mapToLong(stack -> stack.count).sum();
+            double total = stacks.stream().mapToDouble(stack -> stack.weight).sum();
+            String unit = spec.unit();
             List<String> flags = flags(n);
             if (focus != null && !focus.isBlank()) {
-                return new TopFrames(spec.kind(), window(range), n, flags, List.of(), paths(stacks, focus), null);
+                return new TopFrames(spec.kind(), window(range), n, total, unit, flags, List.of(), paths(stacks, focus), null);
             }
             List<FrameRow> rows = rank(stacks);
             Boolean significant = null;
@@ -148,7 +152,7 @@ public class FrameService {
             if (rows.size() > cap) {
                 rows = rows.subList(0, cap);
             }
-            return new TopFrames(spec.kind(), window(range), n, flags, rows, List.of(), significant);
+            return new TopFrames(spec.kind(), window(range), n, total, unit, flags, rows, List.of(), significant);
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
@@ -183,23 +187,22 @@ public class FrameService {
         List<FrameRow> compared = new ArrayList<>();
         for (FrameRow row : left) {
             FrameRow match = other.get(row.frame());
-            double otherShare = match == null ? 0d : match.sharePct();
-            long otherCount = match == null ? 0L : match.count();
+            double shareB = match == null ? 0d : match.totalPct();
+            long otherSamples = match == null ? 0L : match.samples();
             boolean sig = significant(
-                    nLeft, nLeft == 0 ? 0d : row.count() / (double) nLeft, nRight, nRight == 0 ? 0d : otherCount / (double) nRight);
-            double shareA = row.sharePct();
-            double shareB = otherShare;
+                    nLeft, nLeft == 0 ? 0d : row.samples() / (double) nLeft, nRight, nRight == 0 ? 0d : otherSamples / (double) nRight);
+            double shareA = row.totalPct();
             compared.add(new FrameRow(
                     row.frame(),
                     row.category(),
-                    shareA,
+                    row.selfPct(),
+                    row.totalPct(),
+                    row.samples(),
                     row.appCaller(),
-                    row.count(),
-                    otherShare,
-                    sig,
                     shareA,
                     shareB,
-                    shareA - shareB));
+                    shareA - shareB,
+                    sig));
         }
         compared.sort(Comparator.comparingDouble((FrameRow row) -> Math.abs(row.delta() == null ? 0d : row.delta())).reversed());
         return compared;
@@ -210,9 +213,16 @@ public class FrameService {
         Map<String, Acc> byName = new LinkedHashMap<>();
         for (Weighted stack : stacks) {
             total += stack.weight;
+            Set<String> seen = new HashSet<>();
             for (int i = 0; i < stack.frames.size(); i++) {
                 Frame frame = stack.frames.get(i);
                 Acc acc = byName.computeIfAbsent(frame.name(), ignored -> new Acc(frame.category()));
+                if (i == 0) {
+                    acc.self += stack.weight;
+                }
+                if (!seen.add(frame.name())) {
+                    continue;
+                }
                 acc.weight += stack.weight;
                 acc.count += stack.count;
                 if (stack.weight >= acc.best) {
@@ -231,8 +241,9 @@ public class FrameService {
                 break;
             }
             Acc acc = byName.get(name);
-            double share = grand == 0d ? 0d : 100d * acc.weight / grand;
-            rows.add(new FrameRow(name, acc.category, share, acc.appCaller, acc.count, null, null, null, null, null));
+            double totalPct = grand == 0d ? 0d : 100d * acc.weight / grand;
+            double selfPct = grand == 0d ? 0d : 100d * acc.self / grand;
+            rows.add(new FrameRow(name, acc.category, selfPct, totalPct, acc.count, acc.appCaller, null, null, null, null));
         }
         ranked.clear();
         return rows;
@@ -259,11 +270,10 @@ public class FrameService {
                     break;
                 }
             }
-            List<FlameNode> frames = new ArrayList<>();
+            List<String> frames = new ArrayList<>();
             int end = Math.min(stack.frames.size(), at + FOCUS_FRAMES);
             for (int i = at; i < end; i++) {
-                Frame frame = stack.frames.get(i);
-                frames.add(new FlameNode(frame.name(), frame.category(), 0d, 0d, List.of()));
+                frames.add(stack.frames.get(i).name());
             }
             double share = total == 0d ? 0d : 100d * stack.weight / total;
             paths.add(new PathRow(frames, share));
@@ -419,6 +429,7 @@ public class FrameService {
 
     private static final class Acc {
         final String category;
+        double self;
         double weight;
         long count;
         double best;
@@ -446,18 +457,18 @@ public class FrameService {
     public record FrameRow(
             String frame,
             String category,
-            double sharePct,
+            double selfPct,
+            double totalPct,
+            long samples,
             String appCaller,
-            long count,
-            Double vsSharePct,
-            Boolean significant,
             Double shareA,
             Double shareB,
-            Double delta) {}
+            Double delta,
+            Boolean significant) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record PathRow(List<FlameNode> frames, double sharePct) {}
+    public record PathRow(List<String> frames, double sharePct) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -465,6 +476,8 @@ public class FrameService {
             String kind,
             TimeWindow window,
             long n,
+            double total,
+            String unit,
             List<String> flags,
             List<FrameRow> frames,
             List<PathRow> paths,

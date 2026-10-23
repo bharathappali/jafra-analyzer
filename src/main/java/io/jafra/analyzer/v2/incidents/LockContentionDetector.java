@@ -136,12 +136,31 @@ public class LockContentionDetector implements Detector {
                 DetectorSupport.band(warning + " / " + critical + " thread-s/s") + "; formula " + formula,
                 new Who("lock", lock, best <= 0d ? null : 100d * best / Math.max(waitMs, 1d), true),
                 List.of(),
-                List.of("shorten or split the critical section at unknown", "CPU samples inside the holder show why it is held long: unknown"),
+                List.of(
+                        "shorten or split the critical section at " + lock,
+                        "CPU samples inside the holder show why it is held long: " + topCpu(in)),
                 "Threads spent " + HeapSizeAdvice.number(value) + " s per second waiting for locks.",
                 "Lock wait " + HeapSizeAdvice.number(value) + " thread-s/s (" + formula + ")",
                 List.of("jdk.JavaMonitorEnter", "jdk.ThreadPark"),
                 flags,
                 false);
+    }
+
+    private static String topCpu(WindowInput in) {
+        String name = "unknown";
+        double best = -1d;
+        for (SampleRow sample : in.samples().rows("cpu")) {
+            List<Frame> stack = in.samples().stack(sample.stackId());
+            if (stack.isEmpty() || stack.get(0).name() == null || stack.get(0).name().isBlank()) {
+                continue;
+            }
+            if (sample.weight() < best) {
+                continue;
+            }
+            best = sample.weight();
+            name = stack.get(0).name();
+        }
+        return name;
     }
 
     private boolean idle(WindowInput in, SampleRow sample) {

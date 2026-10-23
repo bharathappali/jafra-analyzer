@@ -416,6 +416,8 @@ public class IncidentEngine {
             node.put("t1", V2Times.text(t1));
         }
         node.put("peak_at", V2Times.text(evidence.peakAt()));
+        long end = t1 == null ? System.currentTimeMillis() : t1;
+        node.put("duration_s", (end - evidence.t0()) / 1000d);
         node.put("status", status);
         return node.toString();
     }

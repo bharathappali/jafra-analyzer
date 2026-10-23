@@ -41,9 +41,11 @@ class ChunkReaderRecordingTest {
                 .statusCode(200)
                 .extract()
                 .jsonPath();
-        List<Map<String, Object>> rows = workloads.getList("workloads.findAll { it.pod == '" + pod + "' }");
+        List<Map<String, Object>> rows = workloads.getList("findAll { it.pod == '" + pod + "' }");
         assertEquals(1, rows.size());
-        assertEquals(feature, ((Number) rows.get(0).get("jdk")).intValue());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> jvm = ((List<Map<String, Object>>) rows.get(0).get("jvms")).get(0);
+        assertEquals(feature, ((Number) jvm.get("jdk")).intValue());
 
         List<List<String>> flags = given()
                 .queryParam("from", "0")
@@ -86,10 +88,12 @@ class ChunkReaderRecordingTest {
                 .statusCode(200)
                 .extract()
                 .jsonPath();
-        List<Map<String, Object>> rows = workloads.getList("workloads.findAll { it.pod == '" + pod + "' }");
+        List<Map<String, Object>> rows = workloads.getList("findAll { it.pod == '" + pod + "' }");
         assertEquals(1, rows.size(), rows.toString());
-        assertEquals(21, ((Number) rows.get(0).get("jdk")).intValue());
-        assertEquals(V2Times.text(4_000L), rows.get(0).get("start"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> jvm = ((List<Map<String, Object>>) rows.get(0).get("jvms")).get(0);
+        assertEquals(21, ((Number) jvm.get("jdk")).intValue());
+        assertEquals(V2Times.text(4_000L), jvm.get("start"));
     }
 
     private void ingest(String pod, String chunkId, boolean jvmInformation) throws Exception {

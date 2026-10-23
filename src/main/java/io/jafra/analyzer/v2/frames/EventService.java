@@ -69,9 +69,13 @@ public class EventService {
         V2Range range = range(jvm, last, from, to);
         try {
             List<EventRow> rows = store.queryEvents(
-                    jvm.jvmId(), type, range.from().toEpochMilli(), range.to().toEpochMilli(), order, field, expected, cap);
+                    jvm.jvmId(), type, range.from().toEpochMilli(), range.to().toEpochMilli(), order, field, expected, cap + 1);
+            boolean truncated = rows.size() > cap;
+            if (truncated) {
+                rows = rows.subList(0, cap);
+            }
             MapPauses pauses = "gc.evac_failed".equals(type) ? pauses(jvm, range) : null;
-            List<EventHit> hits = new ArrayList<>();
+            List<ObjectNode> hits = new ArrayList<>();
             for (EventRow row : rows) {
                 ObjectNode fields = fields(row.fields());
                 if (pauses != null && !fields.hasNonNull("pause_us")) {
@@ -80,15 +84,14 @@ public class EventService {
                         fields.put("pause_us", pause);
                     }
                 }
-                hits.add(new EventHit(
-                        row.type(),
-                        V2Times.text(row.ts()),
-                        row.durationUs(),
-                        row.thread(),
-                        row.topFrame(),
-                        fields));
+                hits.add(flat(row, fields));
             }
-            return new EventList(new TimeWindow(V2Times.text(range.from()), V2Times.text(range.to())), hits.size(), hits);
+            return new EventList(
+                    new TimeWindow(V2Times.text(range.from()), V2Times.text(range.to())),
+                    type,
+                    hits.size(),
+                    truncated ? List.of("truncated") : List.of(),
+                    hits);
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
@@ -113,6 +116,33 @@ public class EventService {
             // return an empty object when the stored JSON cannot be read
         }
         return JSON.createObjectNode();
+    }
+
+    private static ObjectNode flat(EventRow row, ObjectNode fields) {
+        ObjectNode hit = JSON.createObjectNode();
+        hit.put("t", V2Times.text(row.ts()));
+        hit.put("type", row.type());
+        if (row.durationUs() == null) {
+            hit.putNull("duration_us");
+        } else {
+            hit.put("duration_us", row.durationUs());
+        }
+        if (row.thread() == null) {
+            hit.putNull("thread");
+        } else {
+            hit.put("thread", row.thread());
+        }
+        if (row.topFrame() == null) {
+            hit.putNull("top_frame");
+        } else {
+            hit.put("top_frame", row.topFrame());
+        }
+        fields.fields().forEachRemaining(entry -> {
+            if (!hit.has(entry.getKey())) {
+                hit.set(entry.getKey(), entry.getValue());
+            }
+        });
+        return hit;
     }
 
     private static V2Range range(JvmRow jvm, String last, String from, String to) {
@@ -156,10 +186,5 @@ public class EventService {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record EventHit(
-            String type, String ts, Long durationUs, String thread, String topFrame, ObjectNode fields) {}
-
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record EventList(TimeWindow window, int n, List<EventHit> events) {}
+    public record EventList(TimeWindow window, String type, int n, List<String> flags, List<ObjectNode> events) {}
 }

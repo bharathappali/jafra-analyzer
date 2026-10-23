@@ -111,7 +111,7 @@ class HeapNearFullDetectorTest {
                     List.of(new HeapNearFullDetector(85, 95, advice)),
                     null,
                     baselines,
-                    new SurfaceService(store, catalogue, baselines));
+                    new SurfaceService(store, catalogue, baselines, null, null));
             engine.onWindow(new WindowCommitted("w-0", jvmId, 0, 5_000, false));
             engine.onWindow(new WindowCommitted("w-5000", jvmId, 5_000, 10_000, false));
             IncidentRecord opened = store.incident("heap_near_full-0");

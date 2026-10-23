@@ -24,6 +24,7 @@ import org.duckdb.DuckDBConnection;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import io.jafra.analyzer.v2.rollup.SettingsMerge;
 import io.jafra.analyzer.v2.rollup.WindowData;
 
 /**
@@ -309,6 +310,15 @@ public class V2Store {
         }
     }
 
+    /** Nearest 5 s rollup window as {@code [fromMs, toMs]}, or null when the metric has no rows. */
+    public long[] nearestWindow(int jvmId, String metric, long aroundMs) throws IOException {
+        Long ts = nearestTs(jvmId, metric, aroundMs);
+        if (ts == null) {
+            return null;
+        }
+        return new long[] {ts, ts + 5_000L};
+    }
+
     /** Last unflagged 5s totals with {@code ts < beforeMs}, newest first. */
     public List<RollupRow> recentTotals(int jvmId, String metric, String group, long beforeMs, int limit)
             throws IOException {
@@ -518,11 +528,10 @@ public class V2Store {
             try (ResultSet rows = statement.executeQuery()) {
                 List<EventRow> found = new ArrayList<>();
                 while (rows.next()) {
-                    long duration = rows.getLong(3);
                     found.add(new EventRow(
                             rows.getString(1),
                             rows.getLong(2),
-                            rows.wasNull() ? null : duration,
+                            nullableLong(rows, 3),
                             rows.getString(4),
                             null,
                             rows.getString(5)));
@@ -689,14 +698,7 @@ public class V2Store {
             try (ResultSet rows = statement.executeQuery()) {
                 List<EventRow> found = new ArrayList<>();
                 while (rows.next()) {
-                    long duration = rows.getLong(3);
-                    found.add(new EventRow(
-                            rows.getString(1),
-                            rows.getLong(2),
-                            rows.wasNull() ? null : duration,
-                            rows.getString(4),
-                            rows.getString(5),
-                            rows.getString(6)));
+                    found.add(readEvent(rows));
                 }
                 return found;
             }
@@ -830,14 +832,7 @@ public class V2Store {
             try (ResultSet rows = statement.executeQuery()) {
                 List<EventRow> found = new ArrayList<>();
                 while (rows.next()) {
-                    long duration = rows.getLong(3);
-                    found.add(new EventRow(
-                            rows.getString(1),
-                            rows.getLong(2),
-                            rows.wasNull() ? null : duration,
-                            rows.getString(4),
-                            rows.getString(5),
-                            rows.getString(6)));
+                    found.add(readEvent(rows));
                 }
                 return found;
             }
@@ -992,17 +987,40 @@ public class V2Store {
         }
     }
 
-    private static IncidentRecord readIncident(ResultSet rows) throws SQLException {
-        long t1 = rows.getLong(8);
-        return new IncidentRecord(
+    private static EventRow readEvent(ResultSet rows) throws SQLException {
+        return new EventRow(
                 rows.getString(1),
-                rows.getInt(2),
-                rows.getString(3),
+                rows.getLong(2),
+                nullableLong(rows, 3),
                 rows.getString(4),
                 rows.getString(5),
-                rows.getString(6),
-                rows.getLong(7),
-                rows.wasNull() ? null : t1,
+                rows.getString(6));
+    }
+
+    /** {@code wasNull} describes the column just read. Call it before the next getter. */
+    private static Long nullableLong(ResultSet rows, int column) throws SQLException {
+        long value = rows.getLong(column);
+        return rows.wasNull() ? null : value;
+    }
+
+    private static IncidentRecord readIncident(ResultSet rows) throws SQLException {
+        String id = rows.getString(1);
+        int jvmId = rows.getInt(2);
+        String type = rows.getString(3);
+        String group = rows.getString(4);
+        String level = rows.getString(5);
+        String status = rows.getString(6);
+        long t0 = rows.getLong(7);
+        Long t1 = nullableLong(rows, 8);
+        return new IncidentRecord(
+                id,
+                jvmId,
+                type,
+                group,
+                level,
+                status,
+                t0,
+                t1,
                 rows.getLong(9),
                 rows.getDouble(10),
                 rows.getString(11),
@@ -1257,6 +1275,30 @@ public class V2Store {
     }
 
     private void touchJvm(Connection write, int jvmId, WindowData data) throws SQLException {
+        int major = data.jdkMajor;
+        String version = data.jdkVersion;
+        String profile = data.profile;
+        String settings = data.settingsJson;
+        try (PreparedStatement read = write.prepareStatement(
+                "SELECT jdk_major, jdk_version, profile, settings FROM jvms WHERE jvm_id = ?")) {
+            read.setInt(1, jvmId);
+            try (ResultSet rows = read.executeQuery()) {
+                if (rows.next()) {
+                    if (major == 0) {
+                        major = rows.getInt(1);
+                    }
+                    String storedVersion = rows.getString(2);
+                    if ((version == null || version.isBlank()) && storedVersion != null && !storedVersion.isBlank()) {
+                        version = storedVersion;
+                    }
+                    String storedProfile = rows.getString(3);
+                    if ((profile == null || profile.isBlank()) && storedProfile != null && !storedProfile.isBlank()) {
+                        profile = storedProfile;
+                    }
+                    settings = SettingsMerge.merge(rows.getString(4), settings);
+                }
+            }
+        }
         try (PreparedStatement statement = write.prepareStatement("""
                 UPDATE jvms
                 SET jdk_major = ?, jdk_version = ?, profile = ?,
@@ -1265,13 +1307,13 @@ public class V2Store {
                     settings = ?::JSON
                 WHERE jvm_id = ?
                 """)) {
-            statement.setInt(1, data.jdkMajor);
-            statement.setString(2, data.jdkVersion);
-            statement.setString(3, data.profile);
+            statement.setInt(1, major);
+            statement.setString(2, version);
+            statement.setString(3, profile);
             statement.setLong(4, data.fromMs);
             statement.setLong(5, data.toMs);
             statement.setInt(6, jvmId);
-            statement.setString(7, data.settingsJson == null ? "{}" : data.settingsJson);
+            statement.setString(7, settings == null ? "{}" : settings);
             statement.setInt(8, jvmId);
             statement.executeUpdate();
         }

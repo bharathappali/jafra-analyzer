@@ -199,6 +199,9 @@ public final class IncidentLifecycle {
 
     private void note(Mark mark) {
         open.latest = mark;
+        if (!isBad(mark)) {
+            return;
+        }
         if (mark.score() > open.worst.score()
                 || (mark.score() == open.worst.score() && mark.fromMs() >= open.worst.fromMs())) {
             open.worst = mark;

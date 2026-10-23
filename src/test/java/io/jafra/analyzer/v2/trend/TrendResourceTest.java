@@ -3,6 +3,7 @@ package io.jafra.analyzer.v2.trend;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
 import org.junit.jupiter.api.Test;
@@ -57,6 +58,21 @@ class TrendResourceTest {
                 .statusCode(200)
                 .body("limit", nullValue())
                 .body("limit_source", nullValue())
-                .body("shape", equalTo("rising"));
+                .body("shape", equalTo("rising"))
+                .body("current", equalTo(1_000_034f))
+                .body("span_s", equalTo(2040))
+                .body("slope_per_h", notNullValue())
+                .body("slope_ci95.lo", notNullValue())
+                .body("flags", hasSize(0));
+
+        given()
+                .queryParam("metric", "metaspace.used.bytes")
+                .queryParam("from", "0")
+                .queryParam("to", "10000")
+                .get(base)
+                .then()
+                .statusCode(422)
+                .body("error", equalTo("not_enough_data"))
+                .body("message", equalTo("not enough data yet (1/30)"));
     }
 }

@@ -5,21 +5,29 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.jafra.analyzer.v2.api.V2Exception;
 import io.jafra.analyzer.v2.catalogue.ViewSpec;
 import io.jafra.analyzer.v2.api.V2Range;
 import io.jafra.analyzer.v2.api.V2Times;
 import io.jafra.analyzer.v2.catalogue.Catalogue;
+import io.jafra.analyzer.v2.frames.FrameService;
 import io.jafra.analyzer.v2.incidents.Baseline;
 import io.jafra.analyzer.v2.incidents.BaselineService;
 import io.jafra.analyzer.v2.catalogue.ChartSpec;
@@ -31,6 +39,7 @@ import io.jafra.analyzer.v2.store.V2Store.EventRow;
 import io.jafra.analyzer.v2.store.V2Store.IncidentRecord;
 import io.jafra.analyzer.v2.store.V2Store.JvmRow;
 import io.jafra.analyzer.v2.store.V2Store.RollupRow;
+import io.jafra.analyzer.v2.trend.TrendService;
 
 /**
  * Workloads, overview, timeline, and charts. Chart views are echoed as given: the catalogue does not
@@ -42,15 +51,22 @@ public class SurfaceService {
     static final int MARKER_CAP = 200;
     static final int PROVEN_BASELINE = 60;
 
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private final V2Store store;
     private final Catalogue catalogue;
     private final BaselineService baselines;
+    private final FrameService frames;
+    private final TrendService trends;
 
     @Inject
-    public SurfaceService(V2Store store, Catalogue catalogue, BaselineService baselines) {
+    public SurfaceService(
+            V2Store store, Catalogue catalogue, BaselineService baselines, FrameService frames, TrendService trends) {
         this.store = store;
         this.catalogue = catalogue;
         this.baselines = baselines;
+        this.frames = frames;
+        this.trends = trends;
     }
 
     /** Overview lanes for one range. Incident groups are chosen from these. */
@@ -64,16 +80,37 @@ public class SurfaceService {
         return lanes;
     }
 
-    public WorkloadList workloads(String cluster) {
+    public List<ContainerWorkload> workloads(String cluster) {
         try {
-            List<Workload> rows = new ArrayList<>();
+            Map<String, List<JvmRow>> grouped = new LinkedHashMap<>();
             for (JvmRow jvm : store.allJvms()) {
                 if (cluster != null && !cluster.isBlank() && !cluster.equals(jvm.clusterId())) {
                     continue;
                 }
-                rows.add(workload(jvm));
+                String key = jvm.namespace() + "\0" + jvm.podName() + "\0" + jvm.containerName() + "\0" + jvm.clusterId();
+                grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(jvm);
             }
-            return new WorkloadList(rows);
+            List<ContainerWorkload> rows = new ArrayList<>();
+            for (List<JvmRow> jvms : grouped.values()) {
+                jvms.sort(Comparator.comparingLong(JvmRow::jvmStartMs).reversed());
+                JvmRow head = jvms.get(0);
+                List<JvmCard> cards = new ArrayList<>();
+                for (JvmRow jvm : jvms) {
+                    cards.add(new JvmCard(
+                            V2Times.text(jvm.jvmStartMs()),
+                            jvm.jdkMajor() == 0 ? null : jvm.jdkMajor(),
+                            jvm.profile(),
+                            V2Times.text(jvm.firstMs()),
+                            V2Times.text(jvm.lastMs()),
+                            jvm.windows()));
+                }
+                rows.add(new ContainerWorkload(
+                        head.clusterId(), head.namespace(), head.podName(), head.containerName(), cards));
+            }
+            rows.sort(Comparator.comparing(ContainerWorkload::ns)
+                    .thenComparing(ContainerWorkload::pod)
+                    .thenComparing(ContainerWorkload::container));
+            return rows;
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
@@ -105,26 +142,38 @@ public class SurfaceService {
         return new ChartList(cards);
     }
 
-    public ChartData chart(JvmRow jvm, String chartId, String view, String since, String last, String from, String to) {
+    public ChartData chart(
+            JvmRow jvm, String chartId, String view, String since, String step, String kind, String last, String from, String to) {
         ChartSpec chart = catalogue.chart(chartId);
         if (chart == null) {
             throw V2Exception.unknownChart(catalogue.chartIds());
         }
         V2Range range = range(jvm, last, from, to);
         Long sinceMs = since == null || since.isBlank() ? null : V2Times.parse(since, "since").toEpochMilli();
-        long used = QueryService.coarsen(5_000, range.to().toEpochMilli() - range.from().toEpochMilli(), SERIES_CAP);
+        long requested = step == null || step.isBlank() ? 5_000 : QueryService.parseStep(step);
+        long used = QueryService.coarsen(requested, range.to().toEpochMilli() - range.from().toEpochMilli(), SERIES_CAP);
         boolean minute = used >= 60_000 && used % 60_000 == 0;
         String echoed = view == null || view.isBlank() ? chart.views().get(0).id() : view;
         try {
             List<MetricSeries> series = new ArrayList<>();
+            Set<String> flags = new LinkedHashSet<>();
             for (String name : chart.metrics()) {
                 MetricSpec metric = catalogue.metric(name);
                 if (metric == null) {
                     continue;
                 }
-                series.add(series(jvm, metric, range, used, minute, sinceMs));
+                MetricSeries row = series(jvm, metric, range, used, minute, sinceMs);
+                series.add(row);
+                flags.addAll(row.flags());
             }
-            List<Marker> markers = markers(jvm, chart.events(), range, sinceMs);
+            List<ObjectNode> markers = markers(jvm, chart.events(), range, sinceMs);
+            Map<String, SeriesSummary> summary = new LinkedHashMap<>();
+            for (MetricSeries row : series) {
+                SeriesSummary stats = summary(row.points());
+                if (stats != null) {
+                    summary.put(row.metric(), stats);
+                }
+            }
             return new ChartData(
                     chart.id(),
                     chart.title(),
@@ -132,8 +181,12 @@ public class SurfaceService {
                     availability(chart, jvm),
                     window(range, QueryService.nameOf(used)),
                     QueryService.nameOf(used),
+                    List.copyOf(flags),
                     series,
-                    markers);
+                    markers,
+                    flame(jvm, chart, kind, last, from, to),
+                    summary,
+                    trend(jvm, chart, series, last, from, to));
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
@@ -339,11 +392,11 @@ public class SurfaceService {
         List<String> flags = new ArrayList<>();
         if (!metric.onJdk(jvm.jdkMajor())) {
             flags.add("not_on_this_jdk");
-            return new MetricSeries(metric.name(), metric.unit(), List.of(), flags);
+            return new MetricSeries(metric.name(), metric.unit(), "avg", List.of(), flags);
         }
         if (metric.optInNmt() && !QueryService.nmtOn(jvm)) {
             flags.add("nmt_off");
-            return new MetricSeries(metric.name(), metric.unit(), List.of(), flags);
+            return new MetricSeries(metric.name(), metric.unit(), "avg", List.of(), flags);
         }
         flags.addAll(QueryService.flags(metric, jvm));
         Map<Long, double[]> buckets = new LinkedHashMap<>();
@@ -367,24 +420,142 @@ public class SurfaceService {
         if (points.size() > SERIES_CAP) {
             points = points.subList(points.size() - SERIES_CAP, points.size());
         }
-        return new MetricSeries(metric.name(), metric.unit(), points, flags);
+        return new MetricSeries(metric.name(), metric.unit(), "avg", points, flags);
     }
 
-    private List<Marker> markers(JvmRow jvm, List<String> types, V2Range range, Long sinceMs) throws IOException {
+    private List<ObjectNode> markers(JvmRow jvm, List<String> types, V2Range range, Long sinceMs) throws IOException {
         if (types != null && types.isEmpty()) {
             return List.of();
         }
         long fromMs = sinceMs == null ? range.from().toEpochMilli() : sinceMs;
         boolean exclusive = sinceMs != null;
         List<EventRow> rows = store.readEvents(jvm.jvmId(), types, fromMs, range.to().toEpochMilli(), exclusive, MARKER_CAP);
-        List<Marker> markers = new ArrayList<>();
+        List<ObjectNode> markers = new ArrayList<>();
         for (EventRow row : rows) {
             if (sinceMs != null && row.ts() <= sinceMs) {
                 continue;
             }
-            markers.add(new Marker(row.ts(), row.type(), row.durationUs(), row.thread()));
+            ObjectNode marker = JSON.createObjectNode();
+            marker.put("t", row.ts());
+            marker.put("type", row.type());
+            if (row.durationUs() == null) {
+                marker.putNull("duration_us");
+            } else {
+                marker.put("duration_us", row.durationUs());
+            }
+            marker.put("thread", row.thread());
+            marker.put("top_frame", row.topFrame());
+            flatten(marker, row.fields());
+            markers.add(marker);
         }
         return markers;
+    }
+
+    private static void flatten(ObjectNode marker, String fields) {
+        if (fields == null || fields.isBlank()) {
+            return;
+        }
+        try {
+            JsonNode tree = JSON.readTree(fields);
+            if (!tree.isObject()) {
+                return;
+            }
+            tree.fields().forEachRemaining(entry -> {
+                if (!marker.has(entry.getKey())) {
+                    marker.set(entry.getKey(), entry.getValue());
+                }
+            });
+        } catch (IOException ignored) {
+            // a marker keeps the common fields when its catalogue payload is not JSON
+        }
+    }
+
+    private FrameService.Flame flame(JvmRow jvm, ChartSpec chart, String kind, String last, String from, String to) {
+        if (chart.frames() == null || chart.frames().isEmpty()) {
+            return null;
+        }
+        String selected = kind == null || kind.isBlank() ? chart.frames().get(0) : kind;
+        try {
+            return frames.flame(jvm, chart.group(), selected, null, null, null, last, from, to);
+        } catch (V2Exception error) {
+            return null;
+        }
+    }
+
+    private ObjectNode trend(JvmRow jvm, ChartSpec chart, List<MetricSeries> series, String last, String from, String to) {
+        String name = trendMetric(chart);
+        if (name == null) {
+            return null;
+        }
+        try {
+            TrendService.Trend body = trends.trend(jvm, name, last, from, to);
+            ObjectNode node = JSON.valueToTree(body);
+            ArrayNode line = node.putArray("line");
+            List<ChartPoint> points = List.of();
+            for (MetricSeries row : series) {
+                if (name.equals(row.metric())) {
+                    points = row.points();
+                    break;
+                }
+            }
+            if (points.size() >= 2) {
+                ChartPoint start = points.get(0);
+                ChartPoint end = points.get(points.size() - 1);
+                double hours = (end.t() - start.t()) / 3_600_000d;
+                double y1 = end.v();
+                double y0 = y1 - body.slopePerH() * hours;
+                line.addArray().add(start.t()).add(y0);
+                line.addArray().add(end.t()).add(y1);
+            }
+            return node;
+        } catch (V2Exception error) {
+            return null;
+        }
+    }
+
+    private String trendMetric(ChartSpec chart) {
+        for (String name : chart.metrics()) {
+            MetricSpec metric = catalogue.metric(name);
+            if (metric != null && metric.trend()) {
+                return name;
+            }
+        }
+        if (chart.note() != null
+                && (chart.note().contains("Theil") || chart.note().toLowerCase().contains("time to limit"))
+                && chart.metrics() != null
+                && !chart.metrics().isEmpty()) {
+            return chart.metrics().get(0);
+        }
+        return null;
+    }
+
+    private static SeriesSummary summary(List<ChartPoint> points) {
+        if (points == null || points.isEmpty()) {
+            return null;
+        }
+        double min = Double.POSITIVE_INFINITY;
+        double max = Double.NEGATIVE_INFINITY;
+        long minAt = points.get(0).t();
+        long maxAt = points.get(0).t();
+        List<Double> values = new ArrayList<>();
+        for (ChartPoint point : points) {
+            values.add(point.v());
+            if (point.v() < min) {
+                min = point.v();
+                minAt = point.t();
+            }
+            if (point.v() > max) {
+                max = point.v();
+                maxAt = point.t();
+            }
+        }
+        values.sort(Double::compare);
+        double median = values.size() % 2 == 1
+                ? values.get(values.size() / 2)
+                : (values.get(values.size() / 2 - 1) + values.get(values.size() / 2)) / 2d;
+        ChartPoint first = points.get(0);
+        ChartPoint last = points.get(points.size() - 1);
+        return new SeriesSummary(first.v(), last.v(), min, minAt, max, maxAt, median);
     }
 
     private List<RollupRow> totals(JvmRow jvm, String metric, boolean minute, V2Range range) throws IOException {
@@ -443,7 +614,8 @@ public class SurfaceService {
                 chart.views(),
                 chart.metrics(),
                 chart.events(),
-                chart.frames());
+                chart.frames(),
+                chart.note());
     }
 
     private static Comparator<Lane> laneOrder() {
@@ -493,19 +665,6 @@ public class SurfaceService {
                 jvm.jdkMajor());
     }
 
-    private static Workload workload(JvmRow jvm) {
-        return new Workload(
-                jvm.clusterId(),
-                jvm.namespace(),
-                jvm.podName(),
-                jvm.containerName(),
-                V2Times.text(jvm.jvmStartMs()),
-                jvm.jdkMajor(),
-                jvm.profile(),
-                V2Times.text(jvm.lastMs()),
-                jvm.windows());
-    }
-
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record TimeWindow(String from, String to, String step) {}
@@ -532,32 +691,26 @@ public class SurfaceService {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record Workload(
-            String cluster,
-            String namespace,
-            String pod,
-            String container,
-            String start,
-            int jdk,
-            String profile,
-            String last,
-            int windows) {}
+    public record JvmCard(
+            String start, Integer jdk, String profile, String first, String last, int windows) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record WorkloadList(List<Workload> workloads) {}
+    public record ContainerWorkload(
+            String cluster, String ns, String pod, String container, List<JvmCard> jvms) {}
 
+    @JsonFormat(shape = JsonFormat.Shape.ARRAY)
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record ChartPoint(long t, double v) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record MetricSeries(String name, String unit, List<ChartPoint> points, List<String> flags) {}
+    public record MetricSeries(String metric, String unit, String stat, List<ChartPoint> points, List<String> flags) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record Marker(long t, String type, Long durationUs, String thread) {}
+    public record SeriesSummary(
+            double first, double last, double min, long minAt, double max, long maxAt, double median) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -569,7 +722,8 @@ public class SurfaceService {
             List<ViewSpec> views,
             List<String> metrics,
             List<String> events,
-            List<String> frames) {}
+            List<String> frames,
+            String note) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -584,8 +738,12 @@ public class SurfaceService {
             String availability,
             TimeWindow window,
             String stepUsed,
-            List<MetricSeries> metrics,
-            List<Marker> markers) {}
+            List<String> flags,
+            List<MetricSeries> series,
+            List<ObjectNode> markers,
+            FrameService.Flame flame,
+            Map<String, SeriesSummary> summary,
+            ObjectNode trend) {}
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Segment(String from, String to, String state) {}

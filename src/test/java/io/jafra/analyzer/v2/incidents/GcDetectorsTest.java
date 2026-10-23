@@ -133,7 +133,7 @@ class GcDetectorsTest {
                 "{\"gc\":{\"young\":\"ParallelScavenge\",\"old\":\"ParallelOld\"},\"jvm\":{\"arguments\":\"-Xmx1g\"}}",
                 Map.of(),
                 List.of(pause("ParallelOld", "Allocation Failure", 2_000))));
-        assertTrue(alloc.todo().stream().anyMatch(line -> line.startsWith("cut allocation at ")));
+        assertTrue(alloc.todo().stream().noneMatch(line -> line.contains("the top alloc frame")));
 
         FullGcDetector failing = new FullGcDetector(3, 12, new io.jafra.analyzer.v2.incidents.support.DetectorHistory(null, null) {
             @Override
