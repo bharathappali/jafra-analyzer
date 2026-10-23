@@ -18,6 +18,8 @@ import io.jafra.analyzer.v2.query.QueryService;
 import io.jafra.analyzer.v2.store.V2Store.JvmRow;
 import io.jafra.analyzer.v2.surface.SurfaceService;
 import io.jafra.analyzer.v2.incidents.IncidentService;
+import io.jafra.analyzer.v2.questions.PersonaQuestions;
+import io.jafra.analyzer.v2.questions.QuestionsCatalogue;
 import io.jafra.analyzer.v2.stream.StreamHub;
 import io.jafra.analyzer.v2.tools.ToolRegistry;
 import io.jafra.analyzer.v2.trend.TrendService;
@@ -38,6 +40,7 @@ public class JvmResource {
     private final IncidentService incidents;
     private final StreamHub streams;
     private final ToolRegistry tools;
+    private final QuestionsCatalogue questions;
 
     @Inject
     public JvmResource(
@@ -49,7 +52,8 @@ public class JvmResource {
             TrendService trends,
             IncidentService incidents,
             StreamHub streams,
-            ToolRegistry tools) {
+            ToolRegistry tools,
+            QuestionsCatalogue questions) {
         this.jvms = jvms;
         this.queries = queries;
         this.surface = surface;
@@ -59,6 +63,7 @@ public class JvmResource {
         this.incidents = incidents;
         this.streams = streams;
         this.tools = tools;
+        this.questions = questions;
     }
 
     @GET
@@ -224,6 +229,19 @@ public class JvmResource {
             @QueryParam("from") String from,
             @QueryParam("to") String to) {
         return trends.trend(jvms.resolve(namespace, pod, container, cluster, start), metric, last, from, to);
+    }
+
+    @GET
+    @Blocking
+    @Path("/questions/starters")
+    public PersonaQuestions starters(
+            @RestPath String namespace,
+            @RestPath String pod,
+            @RestPath String container,
+            @QueryParam("cluster") String cluster,
+            @QueryParam("start") String start) {
+        jvms.resolve(namespace, pod, container, cluster, start);
+        return questions.starters();
     }
 
     @GET

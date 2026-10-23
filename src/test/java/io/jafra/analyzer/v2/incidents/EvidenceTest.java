@@ -44,7 +44,7 @@ class EvidenceTest {
                     List.of(new ScriptedDetector(script)),
                     null,
                     new BaselineService(store, catalogue),
-                    new SurfaceService(store, catalogue, new BaselineService(store, catalogue), null, null));
+                    new SurfaceService(store, catalogue, new BaselineService(store, catalogue), null, null, null));
             feed(store, engine, 0);
             feed(store, engine, 5_000);
             IncidentRecord row = store.incidents(store.findJvms("ns", "pod", "app", "c").get(0).jvmId()).get(0);

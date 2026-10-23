@@ -1,0 +1,1850 @@
+{
+  "version": "u13",
+  "notes": "Templates use {placeholders}. Analyzer fills them before serving. Times in display text are HH:MM:SS UTC. Tool args still use full RFC 3339.",
+  "placeholders": {
+    "incident": {
+      "t0": "incident.t0 formatted HH:MM:SS UTC",
+      "t1": "incident.t1 formatted HH:MM:SS UTC, or t0 when still open",
+      "headline": "incident.headline as stored",
+      "who": "incident.who.name if present, else 'the hot frame'",
+      "pod": "jvm.pod for the workload",
+      "peak": "how_bad.evidence.worst.value + unit when present, else a short number taken from headline",
+      "type_title": "human title for incident.type (optional; not required in templates below)"
+    },
+    "chart_range": {
+      "from": "range start HH:MM:SS UTC (UI fills from brush; analyzer leaves placeholder in range_questions)",
+      "to": "range end HH:MM:SS UTC",
+      "title": "chart.title",
+      "metric": "primary series metric name for the chart"
+    }
+  },
+  "starters": {
+    "developer": [
+      "Is this JVM healthy right now?",
+      "What are the top CPU consumers?",
+      "Is the heap growing?",
+      "Which incidents need attention first?",
+      "What should I fix before the next deploy?"
+    ],
+    "expert": [
+      "Summarise open incidents with scores and overlapping groups.",
+      "top_frames kind=cpu for the current window — what dominates self_pct?",
+      "get_trend on heap.used.bytes — slope and time_to_limit?",
+      "Any CFS throttle or TTSP outliers in the last window?",
+      "Which subsystem has the highest vs_normal in get_overview?"
+    ]
+  },
+  "incidents": {
+    "cpu_throttling": {
+      "group": "cpu",
+      "developer": [
+        "Why is this pod throttled in {t0}–{t1}?",
+        "Which threads were burning CPU while the container sat on its quota?",
+        "Would raising the CPU limit fix the slowdown?",
+        "Did throttling make GC or safepoints slower in this window?",
+        "What does {headline} mean for request latency?"
+      ],
+      "expert": [
+        "Break down on-CPU samples while CFS throttled this window ({peak}).",
+        "Correlate throttled slices with time-to-safepoint and GC pause outliers.",
+        "Is the cgroup quota undersized for the runnable thread count?",
+        "Compare GC and compiler thread counts against the cgroup quota.",
+        "Which frames hold CPU during throttled periods?"
+      ]
+    },
+    "long_pause": {
+      "group": "gc",
+      "developer": [
+        "What caused the long GC pause at {t0}?",
+        "Did this pause hurt request latency?",
+        "Is the heap too small for this workload?",
+        "How do I make GC pauses shorter?",
+        "What does {headline} mean for users?"
+      ],
+      "expert": [
+        "Phase breakdown of the pause at {t0} ({peak}).",
+        "Was the pause dominated by time-to-safepoint, root scanning, or copy/compaction?",
+        "Promotion and old-gen occupancy before vs after this collection.",
+        "Would a different GC or pause target change this?",
+        "Which threads were running into the safepoint?"
+      ]
+    },
+    "gc_overhead": {
+      "group": "gc",
+      "developer": [
+        "Why is so much time spent in GC?",
+        "What is allocating so much memory here?",
+        "Is GC overhead slowing the app down?",
+        "Should I give this pod a bigger heap?",
+        "What changed between {t0} and {t1}?"
+      ],
+      "expert": [
+        "Allocation rate and top sites during {t0}–{t1}.",
+        "Young vs mixed/full collection mix and causes in the window.",
+        "Eden sizing vs allocation rate.",
+        "Is the pause target being met?",
+        "Top frames by allocated bytes in the window."
+      ]
+    },
+    "lock_contention": {
+      "group": "locks",
+      "developer": [
+        "Which lock is the thread waiting on ({who})?",
+        "Is one thread holding it?",
+        "Did this stall request threads?",
+        "What should I change in the code to reduce waits?",
+        "When did waits peak between {t0} and {t1}?"
+      ],
+      "expert": [
+        "Monitor enter duration distribution and the owner stack.",
+        "Park vs monitor-enter share in this window.",
+        "Is the lock a single hot object or a class of locks?",
+        "Owner stack for the longest enter in {t0}–{t1}.",
+        "Correlate waits with endpoint latency in the same window."
+      ]
+    },
+    "slow_peer": {
+      "group": "socket",
+      "developer": [
+        "Which host is slow ({who})?",
+        "Are reads or writes the slow ones?",
+        "Is this the database or another service?",
+        "Did slow peers cause the backlog between {t0} and {t1}?",
+        "What timeouts apply at this latency?"
+      ],
+      "expert": [
+        "Socket read p99 vs the recording threshold, by remote address.",
+        "Bytes and duration of the slowest reads in the window.",
+        "Any TLS handshake spikes on the same peers?",
+        "Read vs write share for {who} in {t0}–{t1}.",
+        "Correlate peer latency with endpoint slow calls."
+      ]
+    },
+    "pinning_burst": {
+      "group": "vt",
+      "developer": [
+        "Why are virtual threads pinned?",
+        "Which frame is holding the pin?",
+        "Does this block the carrier pool?",
+        "How do I stop the pinning between {t0} and {t1}?",
+        "Is synchronized or a native call the cause?"
+      ],
+      "expert": [
+        "Pinned duration distribution and the top native/monitor frames.",
+        "Carrier thread count vs pinned virtual threads.",
+        "Is the pin a synchronized block or a native call?",
+        "Top pin sites by us in {t0}–{t1}.",
+        "Submit-failed count during the same window."
+      ]
+    },
+    "deopt_storm": {
+      "group": "jit",
+      "developer": [
+        "Why did the JIT deoptimise so much?",
+        "Which method is unstable?",
+        "Will this settle?",
+        "Did deopts make {pod} slower between {t0} and {t1}?",
+        "What should I change in that method?"
+      ],
+      "expert": [
+        "Deoptimisation reasons in the window.",
+        "Compile queue depth against the deopt rate.",
+        "Uncommon-trap vs not-entrant share.",
+        "Hottest methods by deopt count in {t0}–{t1}.",
+        "Compile time pct during the storm."
+      ]
+    },
+    "thread_churn": {
+      "group": "threads",
+      "developer": [
+        "Why are so many threads starting?",
+        "Is a pool unbounded?",
+        "What are the new threads doing?",
+        "Did starts peak at {t0}?",
+        "Should these be virtual threads or a fixed pool?"
+      ],
+      "expert": [
+        "Thread start rate vs live count.",
+        "Top thread names by start count.",
+        "Any matching thread-end rate, or are they leaking?",
+        "Pool sizes vs starts in {t0}–{t1}.",
+        "Correlate starts with CPU and lock waits."
+      ]
+    },
+    "native_growth": {
+      "group": "nmt",
+      "developer": [
+        "What is growing outside the heap?",
+        "Is native memory close to the pod limit?",
+        "Which category grew?",
+        "Could {pod} be OOM-killed for native growth?",
+        "Did growth reverse after {t1}?"
+      ],
+      "expert": [
+        "NMT committed by category across the window.",
+        "Direct buffer vs other native.",
+        "Compare committed with the cgroup memory limit.",
+        "Category deltas {t0}–{t1}.",
+        "DirectByteBuffer retainers if direct grew."
+      ]
+    },
+    "metaspace_growth": {
+      "group": "metaspace",
+      "developer": [
+        "Why is metaspace growing?",
+        "Are class loaders leaking?",
+        "How close is it to the limit?",
+        "What loaded classes between {t0} and {t1}?",
+        "Should I raise MaxMetaspaceSize?"
+      ],
+      "expert": [
+        "Loaded vs unloaded classes in the window.",
+        "Top class loaders by metadata.",
+        "Is MaxMetaspaceSize set?",
+        "Class-space used vs committed {t0}–{t1}.",
+        "Any Metadata GC Threshold events?"
+      ]
+    },
+    "evac_promotion_failure": {
+      "group": "gc",
+      "developer": [
+        "What does an evacuation failure mean here?",
+        "Is the heap running out of free space?",
+        "How close did this get to an OutOfMemoryError?",
+        "What allocated so much at {t0}?",
+        "Would a bigger heap help?"
+      ],
+      "expert": [
+        "Evacuation or promotion failure count and bytes.",
+        "Old-gen occupancy before the failure.",
+        "Humongous allocations in the same window.",
+        "Live set vs region free at {t0}.",
+        "G1HeapRegionSize vs humongous object sizes."
+      ]
+    },
+    "alloc_spike": {
+      "group": "alloc",
+      "developer": [
+        "What allocated the spike at {t0}?",
+        "Which class or site is responsible?",
+        "Did this cause a GC pause?",
+        "Is the spike from traffic or a code path?",
+        "What would cut allocation here?"
+      ],
+      "expert": [
+        "Top allocation sites by bytes in the window.",
+        "TLAB refill rate vs the outside-TLAB path.",
+        "Promotion rate after the spike.",
+        "Top classes by sampled bytes {t0}–{t1}.",
+        "Correlate alloc rate with GC pause count."
+      ]
+    },
+    "heap_near_full": {
+      "group": "heap",
+      "developer": [
+        "Why is the heap staying full after GC?",
+        "Is this a leak or a big live set?",
+        "What should I change first?",
+        "How close is {pod} to OutOfMemoryError?",
+        "Did occupancy drop after {t1}?"
+      ],
+      "expert": [
+        "Live set vs the band ({peak}).",
+        "Top retained classes after GC.",
+        "Old-gen occupancy trend and time to the limit.",
+        "After-GC heap vs max in {t0}–{t1}.",
+        "Promotion rate into old gen."
+      ]
+    },
+    "cpu_jump": {
+      "group": "cpu",
+      "developer": [
+        "Why did CPU jump at {t0}?",
+        "Which threads or methods caused the spike?",
+        "Is the pod near its CPU limit?",
+        "Did the jump overlap a GC or safepoint?",
+        "What should I look at first for {headline}?"
+      ],
+      "expert": [
+        "On-CPU sample breakdown during the jump ({peak}).",
+        "User vs system cores in {t0}–{t1}.",
+        "Runnable thread count vs cgroup quota.",
+        "Top frames by self_pct in the jump window.",
+        "Correlate with jit.compile.us and gc.pause.us."
+      ]
+    },
+    "cpu_saturation": {
+      "group": "cpu",
+      "developer": [
+        "Why is the CPU saturated?",
+        "Are we CPU-bound or waiting on I/O?",
+        "Would more cores help {pod}?",
+        "Which pools are runnable?",
+        "What changed between {t0} and {t1}?"
+      ],
+      "expert": [
+        "Load vs cgroup quota and runnable count.",
+        "Off-CPU vs on-CPU share in the window.",
+        "Hottest frames while saturated.",
+        "GC/compiler thread CPU vs application threads.",
+        "Throttle pct during saturation."
+      ]
+    },
+    "hot_frame_shift": {
+      "group": "cpu",
+      "developer": [
+        "Why did the hot method change?",
+        "Which new frame took over at {t0}?",
+        "Is this a new code path or a traffic shift?",
+        "Did the shift hurt latency?",
+        "What does {headline} mean?"
+      ],
+      "expert": [
+        "Top frames before vs after {t0} (kind=cpu).",
+        "Self_pct deltas for the shifted frames.",
+        "Any deopt or class-load burst in the same window?",
+        "Endpoint mix change around the shift.",
+        "Wall vs CPU share for the new hot frame."
+      ]
+    },
+    "full_gc": {
+      "group": "gc",
+      "developer": [
+        "Why did a full GC run at {t0}?",
+        "What triggered it?",
+        "Did requests stall during the full GC?",
+        "Is the heap too small?",
+        "How do I avoid another full GC?"
+      ],
+      "expert": [
+        "Cause and phase breakdown of the full GC ({peak}).",
+        "Heap before/after and promotion failure flags.",
+        "System.gc callers if present.",
+        "Old-gen occupancy trend into {t0}.",
+        "Would a different collector change this?"
+      ]
+    },
+    "system_gc_calls": {
+      "group": "gc",
+      "developer": [
+        "Who is calling System.gc()?",
+        "Do these calls help or hurt?",
+        "Can I disable them with a flag?",
+        "When did calls cluster between {t0} and {t1}?",
+        "Did they cause long pauses?"
+      ],
+      "expert": [
+        "System.gc count and caller stacks in the window.",
+        "Pause cost attributable to explicit GC.",
+        "DisableExplicitGC / ExplicitGCInvokesConcurrent impact.",
+        "Correlation with full_gc incidents.",
+        "Top frames invoking GC."
+      ]
+    },
+    "zgc_alloc_stall": {
+      "group": "gc",
+      "developer": [
+        "Why did ZGC stall allocations at {t0}?",
+        "Is the heap undersized for the allocation rate?",
+        "Did stalls hurt request latency?",
+        "What was allocating so fast?",
+        "Would a bigger heap stop the stalls?"
+      ],
+      "expert": [
+        "ZGC allocation stall us and page alloc rate ({peak}).",
+        "Relocation set size vs stall windows.",
+        "Allocation rate vs heap capacity in {t0}–{t1}.",
+        "Top alloc frames during stalls.",
+        "Uncommit/unmap activity around the stall."
+      ]
+    },
+    "old_gen_rising": {
+      "group": "heap",
+      "developer": [
+        "Why is old gen rising?",
+        "Is this a leak?",
+        "How long until the heap fills?",
+        "What is promoting into old gen?",
+        "What should I change first?"
+      ],
+      "expert": [
+        "Old-gen occupancy slope and time_to_limit.",
+        "Promotion rate vs after-GC live set.",
+        "Top retained classes after GC.",
+        "Mixed/full collection frequency in {t0}–{t1}.",
+        "Humongous / large object share."
+      ]
+    },
+    "oom": {
+      "group": "heap",
+      "developer": [
+        "What ran out of memory at {t0}?",
+        "Was it heap, metaspace, or native?",
+        "Which allocation failed?",
+        "Did the pod restart after {headline}?",
+        "What should I raise or fix first?"
+      ],
+      "expert": [
+        "OOM type and the failing allocation site.",
+        "Heap/metaspace/native at the OOM.",
+        "GC overhead and promotion failures leading in.",
+        "cgroup memory events around {t0}.",
+        "Top retained classes just before OOM."
+      ]
+    },
+    "class_load_burst": {
+      "group": "classes",
+      "developer": [
+        "Why did so many classes load at {t0}?",
+        "Is something generating classes?",
+        "Which loader is responsible?",
+        "Did loading slow the app?",
+        "Is this expected after a deploy?"
+      ],
+      "expert": [
+        "Loaded classes/s and top loaders in {t0}–{t1}.",
+        "DefineClass / generate proxy frames.",
+        "Metaspace delta during the burst.",
+        "JIT compile queue depth after the burst.",
+        "Any matching unload burst?"
+      ]
+    },
+    "class_unload_burst": {
+      "group": "classes",
+      "developer": [
+        "Why were classes unloaded here?",
+        "Was a class loader released?",
+        "Did this free metaspace?",
+        "Is unloading expected between {t0} and {t1}?",
+        "Did it cause a long GC?"
+      ],
+      "expert": [
+        "Unloaded classes/s and collected loaders.",
+        "Metaspace before vs after unloading.",
+        "GC cause (Metadata GC Threshold vs System.gc).",
+        "Loader leak signals around the burst.",
+        "Pause cost of the unloading collection."
+      ]
+    },
+    "loader_leak": {
+      "group": "classes",
+      "developer": [
+        "Is a class loader leaking?",
+        "Which loader keeps growing?",
+        "Will this hit MaxMetaspaceSize?",
+        "What code creates these loaders?",
+        "How do I confirm and fix it?"
+      ],
+      "expert": [
+        "Loader metadata growth and class counts.",
+        "Unreachable vs retained loaders.",
+        "Metaspace trend and time to MaxMetaspaceSize.",
+        "Top frames creating URLClassLoader / custom loaders.",
+        "Correlate with class_load_burst incidents."
+      ]
+    },
+    "direct_buffer_leak": {
+      "group": "nmt",
+      "developer": [
+        "Are direct buffers leaking?",
+        "Which code allocates them?",
+        "Is native memory near the pod limit?",
+        "Did buffers get released after {t1}?",
+        "What should I change?"
+      ],
+      "expert": [
+        "Direct buffer capacity vs NMT Direct category.",
+        "Top allocators of DirectByteBuffer.",
+        "cgroup memory vs direct growth in {t0}–{t1}.",
+        "Cleaner / deallocate rate.",
+        "Compare with socket/file buffer usage."
+      ]
+    },
+    "container_near_limit": {
+      "group": "container",
+      "developer": [
+        "Is the pod close to its memory limit?",
+        "Will Kubernetes OOM-kill {pod}?",
+        "Is growth from heap or native?",
+        "What should I raise first?",
+        "When did usage cross the band ({t0})?"
+      ],
+      "expert": [
+        "container.usage.pct_limit vs RSS and cache.",
+        "Heap + NMT committed vs cgroup limit.",
+        "Working set trend and time_to_limit.",
+        "Page cache vs anonymous in {t0}–{t1}.",
+        "Any memory.failcnt / OOM events?"
+      ]
+    },
+    "overcommitted_config": {
+      "group": "container",
+      "developer": [
+        "Is the JVM configured bigger than the pod?",
+        "Which flag overcommits memory or CPU?",
+        "Could this cause throttling or OOM kills?",
+        "What should the limits be for {pod}?",
+        "Did overcommit show up between {t0} and {t1}?"
+      ],
+      "expert": [
+        "-Xmx / MaxMetaspaceSize / DirectMemory vs cgroup limits.",
+        "CPU shares/quota vs ActiveProcessorCount.",
+        "Ergonomics vs explicit flags.",
+        "Rss + reserved vs limit headroom.",
+        "Recommend flag and limit changes."
+      ]
+    },
+    "pool_saturation": {
+      "group": "threads",
+      "developer": [
+        "Which thread pool is saturated?",
+        "Are requests queuing?",
+        "Should I raise the pool size?",
+        "What are the busy threads doing?",
+        "When did saturation start ({t0})?"
+      ],
+      "expert": [
+        "Pool busy pct and queue depth ({peak}).",
+        "Top stacks of saturated pool threads.",
+        "Submit vs completed rate in {t0}–{t1}.",
+        "Lock/IO waits inside the pool.",
+        "Correlate with endpoint latency."
+      ]
+    },
+    "thread_leak": {
+      "group": "threads",
+      "developer": [
+        "Are threads leaking?",
+        "Which names keep growing?",
+        "Will {pod} hit the thread limit?",
+        "What starts these threads?",
+        "Did live count ever drop after {t0}?"
+      ],
+      "expert": [
+        "Live vs started cumulative delta.",
+        "Top thread name prefixes by live count.",
+        "Missing thread-end rate.",
+        "Stacks of long-lived unexpected threads.",
+        "Pool configuration vs observed growth."
+      ]
+    },
+    "event_loop_blocked": {
+      "group": "threads",
+      "developer": [
+        "Why is the event loop blocked?",
+        "Which frame held the loop at {t0}?",
+        "Did this stall requests?",
+        "Is it a lock, I/O, or CPU hog?",
+        "How do I keep the loop free?"
+      ],
+      "expert": [
+        "Event-loop thread stacks during blocks.",
+        "Park/monitor/socket wait share on the loop thread.",
+        "Slow calls overlapping {t0}–{t1}.",
+        "Carrier vs event-loop naming.",
+        "Max block duration and frequency."
+      ]
+    },
+    "single_hot_lock": {
+      "group": "locks",
+      "developer": [
+        "Which single lock is hottest ({who})?",
+        "Who holds it and for how long?",
+        "Did it stall many threads?",
+        "How do I split or remove this lock?",
+        "When was the longest enter between {t0} and {t1}?"
+      ],
+      "expert": [
+        "Hot monitor class and owner stack.",
+        "Enter duration histogram for that monitor.",
+        "Waiters vs hold time in the window.",
+        "Parallelism lost to this lock.",
+        "Alternative concurrency structure."
+      ]
+    },
+    "tls_churn": {
+      "group": "socket",
+      "developer": [
+        "Why so many TLS handshakes?",
+        "Is connection reuse broken?",
+        "Which peer is churning ({who})?",
+        "Did handshakes slow requests between {t0} and {t1}?",
+        "Should I enable session resumption or a pool?"
+      ],
+      "expert": [
+        "TLS handshake rate by peer.",
+        "Handshake us vs socket read us.",
+        "New connections vs reused sessions.",
+        "Correlate with slow_peer incidents.",
+        "Client/server cipher and resumption flags if present."
+      ]
+    },
+    "slow_file_io": {
+      "group": "file",
+      "developer": [
+        "Which file I/O is slow?",
+        "Is it read or write?",
+        "Is the disk or the NFS path the problem?",
+        "Did slow I/O block threads between {t0} and {t1}?",
+        "What path shows up in {headline}?"
+      ],
+      "expert": [
+        "File read/write us by path.",
+        "Bytes and duration of the slowest ops.",
+        "Container disk iops/bytes in the window.",
+        "Threads blocked in file I/O stacks.",
+        "Correlate with endpoint slow calls."
+      ]
+    },
+    "exception_storm": {
+      "group": "exceptions",
+      "developer": [
+        "Which exceptions jumped at {t0}?",
+        "Are these errors reaching users?",
+        "What code is throwing them?",
+        "Is this timeouts or bad input?",
+        "How many per second was the peak ({peak})?"
+      ],
+      "expert": [
+        "Thrown/s by exception class.",
+        "Top throw frames in {t0}–{t1}.",
+        "Error vs checked exception share.",
+        "Overlap with endpoint error rate.",
+        "First occurrence stack for the dominant type."
+      ]
+    },
+    "error_thrown": {
+      "group": "exceptions",
+      "developer": [
+        "What Error was thrown at {t0}?",
+        "Is this harmful?",
+        "Did a thread die?",
+        "How often does {headline} happen?",
+        "What should I fix first?"
+      ],
+      "expert": [
+        "Error class and stack at {t0}.",
+        "Recurrence interval and triggering input.",
+        "Caught vs uncaught outcome.",
+        "Related OOM / StackOverflow signals.",
+        "Thread dump context around the throw."
+      ]
+    },
+    "endpoint_slowdown": {
+      "group": "endpoint",
+      "developer": [
+        "Which endpoint got slow?",
+        "Is GC or a peer causing it?",
+        "How many users were affected?",
+        "What changed between {t0} and {t1}?",
+        "What does {headline} mean for SLOs?"
+      ],
+      "expert": [
+        "Endpoint latency p99 vs baseline ({peak}).",
+        "Wait-cause breakdown for slow calls.",
+        "Overlap with GC pauses and slow peers.",
+        "Calls/s and slow pct in the window.",
+        "Top frames on slow-call wall samples."
+      ]
+    },
+    "slow_requests": {
+      "group": "endpoint",
+      "developer": [
+        "Why were requests slow at {t0}?",
+        "Which endpoint is worst?",
+        "Is the server overloaded?",
+        "Did fewer requests complete?",
+        "What should I check first?"
+      ],
+      "expert": [
+        "Slow-call count and latency distribution.",
+        "Wait cause mix (cpu/lock/io/gc).",
+        "Pool saturation and queueing signals.",
+        "Peer and file I/O overlap in {t0}–{t1}.",
+        "Flame of wall samples in slow windows."
+      ]
+    },
+    "jit_backlog": {
+      "group": "jit",
+      "developer": [
+        "Why is the JIT compile queue backed up?",
+        "Is the app running more interpreted code?",
+        "Did a big deploy or deopt storm cause this?",
+        "Will it drain on its own after {t1}?",
+        "What can I tune?"
+      ],
+      "expert": [
+        "Compile queue depth and compile.us ({peak}).",
+        "Compiles/s vs deopts/s in {t0}–{t1}.",
+        "Compiler thread CPU vs cgroup quota.",
+        "Methods waiting longest in the queue.",
+        "CICompilerCount / compiler thread ergonomics."
+      ]
+    },
+    "safepoint_overhead": {
+      "group": "safepoint",
+      "developer": [
+        "Why is so much time in safepoints?",
+        "Is this GC, deopt, or something else?",
+        "Did safepoints stall requests?",
+        "What operation dominated between {t0} and {t1}?",
+        "How do I reduce safepoint time?"
+      ],
+      "expert": [
+        "Safepoint time_pct and ops breakdown ({peak}).",
+        "TTSP vs inside-safepoint duration.",
+        "GC vs non-GC safepoint share.",
+        "Threads slow to reach safepoint.",
+        "Correlate with cpu_throttling and ttsp_spike."
+      ]
+    },
+    "ttsp_spike": {
+      "group": "safepoint",
+      "developer": [
+        "Why did time-to-safepoint spike at {t0}?",
+        "Which thread was slow to stop?",
+        "Did CPU throttling delay it?",
+        "Did the spike stretch a GC pause?",
+        "What should I fix first?"
+      ],
+      "expert": [
+        "TTSP us distribution and the slow threads ({peak}).",
+        "Off-CPU / native frames during TTSP.",
+        "CFS throttle overlap with the spike.",
+        "GC pause elongation attributable to TTSP.",
+        "Hot non-safepoint-friendly code paths."
+      ]
+    },
+    "vt_submit_failed": {
+      "group": "vt",
+      "developer": [
+        "Why did virtual thread submits fail?",
+        "Is the scheduler saturated?",
+        "Did work get dropped between {t0} and {t1}?",
+        "What does {headline} mean for users?",
+        "How do I stop submit failures?"
+      ],
+      "expert": [
+        "vt.submit_failed.count and carrier saturation.",
+        "Pinned us overlapping submit failures.",
+        "Queue depth / rejection policy if present.",
+        "Stacks at submit failure sites.",
+        "Correlate with pinning_burst and pool_saturation."
+      ]
+    }
+  },
+  "charts": {
+    "cpu-limit": {
+      "group": "cpu",
+      "title": "CPU used vs the limit",
+      "developer": [
+        "Is this JVM close to its CPU limit right now?",
+        "Why is CPU high on this chart?",
+        "Is throttling happening while CPU is near the limit?",
+        "Which threads drive CPU here?",
+        "Would raising the limit help?"
+      ],
+      "expert": [
+        "cpu.used.cores vs cpu.limit.cores and throttle pct.",
+        "Runnable count vs cgroup quota.",
+        "User vs system breakdown.",
+        "Top on-CPU frames for the visible window.",
+        "Correlate with long_pause and ttsp_spike."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did CPU use change between {from} and {to}?",
+          "What caused the peak of CPU use in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring CPU use down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for CPU use in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "cpu-threads": {
+      "group": "cpu",
+      "title": "CPU by thread",
+      "developer": [
+        "Which thread is hottest on this heat map?",
+        "Is one pool dominating CPU?",
+        "Did a new hot thread appear recently?",
+        "Are GC or JIT threads expensive here?"
+      ],
+      "expert": [
+        "Top threads by cpu.thread.pct.",
+        "Pool name patterns among hot threads.",
+        "GC/compiler thread share.",
+        "Heat-map cells overlapping incidents."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did per-thread CPU change between {from} and {to}?",
+          "What caused the peak of per-thread CPU in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring per-thread CPU down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for per-thread CPU in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "cpu-flame": {
+      "group": "cpu",
+      "title": "CPU flame graph",
+      "developer": [
+        "What are the top CPU consumers?",
+        "Which of my methods are hot?",
+        "Is JDK or app code dominating?",
+        "How can I make the hottest frame cheaper?"
+      ],
+      "expert": [
+        "top_frames kind=cpu for this window.",
+        "App vs jdk vs jvm category share.",
+        "Paths into the hottest app frame.",
+        "Compare flame during incidents vs quiet periods."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did on-CPU samples change between {from} and {to}?",
+          "What caused the peak of on-CPU samples in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring on-CPU samples down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for on-CPU samples in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "heap-spaces": {
+      "group": "heap",
+      "title": "Heap spaces over time",
+      "developer": [
+        "Why is old gen rising on this chart?",
+        "Is eden sized for the allocation rate?",
+        "What happened to survivors in this window?",
+        "Did a full GC clear old gen?"
+      ],
+      "expert": [
+        "heap.space.used.bytes by space.",
+        "Survivor age distribution.",
+        "Promotion into old gen.",
+        "Before/after GC markers on spaces."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did heap spaces change between {from} and {to}?",
+          "What caused the peak of heap spaces in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring heap spaces down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for heap spaces in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "heap-used": {
+      "group": "heap",
+      "title": "Heap used vs max",
+      "developer": [
+        "Is the heap growing?",
+        "How close are we to -Xmx?",
+        "Is this a leak or a big live set?",
+        "When will we hit the limit at this rate?"
+      ],
+      "expert": [
+        "get_trend on heap.used.bytes.",
+        "used vs committed vs max.",
+        "After-GC occupancy trend.",
+        "Time to limit with slope_ci95."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did heap used change between {from} and {to}?",
+          "What caused the peak of heap used in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring heap used down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for heap used in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "heap-live": {
+      "group": "heap",
+      "title": "Live after full GC",
+      "developer": [
+        "Why is live set high after GC?",
+        "Did a full GC free enough?",
+        "Is the live set growing across GCs?",
+        "What should I inspect in a heap dump?"
+      ],
+      "expert": [
+        "heap.after_gc.bytes trend.",
+        "Occupancy pct after full GCs.",
+        "Delta before vs after GC.",
+        "Overlap with heap_near_full / old_gen_rising."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did live heap after GC change between {from} and {to}?",
+          "What caused the peak of live heap after GC in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring live heap after GC down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for live heap after GC in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "alloc-classes": {
+      "group": "alloc",
+      "title": "What fills the heap: top classes",
+      "developer": [
+        "Which class allocates the most?",
+        "Is byte[] or a domain object dominant?",
+        "Did the top class change recently?",
+        "Where in my code does that class come from?"
+      ],
+      "expert": [
+        "alloc.sampled.bytes by class.",
+        "Top classes over time view.",
+        "Rate vs total bytes.",
+        "Link top class to allocation sites."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did allocation change between {from} and {to}?",
+          "What caused the peak of allocation in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring allocation down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for allocation in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "alloc-sites": {
+      "group": "alloc",
+      "title": "What fills the heap: allocation paths",
+      "developer": [
+        "Which allocation path is hottest?",
+        "Did a path trigger a GC?",
+        "Is this path expected for this traffic?",
+        "How do I cut allocations on that path?"
+      ],
+      "expert": [
+        "top_frames kind=alloc.",
+        "GC-triggering allocation count.",
+        "Paths into the hottest site.",
+        "TLAB vs outside-TLAB if available."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did allocation paths change between {from} and {to}?",
+          "What caused the peak of allocation paths in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring allocation paths down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for allocation paths in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "alloc-flame": {
+      "group": "alloc",
+      "title": "Allocation flame graph",
+      "developer": [
+        "Who allocates the most memory?",
+        "Which of my frames show up in the flame?",
+        "Is allocation spiky or steady?",
+        "What would cut the hottest stack?"
+      ],
+      "expert": [
+        "Flame kind=alloc for the window.",
+        "Self vs total on hottest app frames.",
+        "Overlap with alloc_spike incidents.",
+        "Compare with heap-used slope."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did allocation samples change between {from} and {to}?",
+          "What caused the peak of allocation samples in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring allocation samples down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for allocation samples in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "gc-freed": {
+      "group": "gc",
+      "title": "Memory freed by GC",
+      "developer": [
+        "How much does each GC free?",
+        "Are collections freeing less over time?",
+        "Is G1 copying a lot?",
+        "Did a full GC free old gen?"
+      ],
+      "expert": [
+        "gc.freed.bytes and gc.copied.bytes.",
+        "Young vs mixed vs full free amounts.",
+        "Shenandoah collected bytes if present.",
+        "Trend of freed bytes per collection."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did memory freed by GC change between {from} and {to}?",
+          "What caused the peak of memory freed by GC in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring memory freed by GC down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for memory freed by GC in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "gc-pauses": {
+      "group": "gc",
+      "title": "GC pauses",
+      "developer": [
+        "What caused the long pauses on this chart?",
+        "Is pause time a large share of runtime?",
+        "How often are full GCs?",
+        "Did pauses hurt endpoints?"
+      ],
+      "expert": [
+        "gc.pause.us distribution and time_pct.",
+        "Full GC count in the window.",
+        "Overlap with long_pause incidents.",
+        "Phase chart follow-up."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did GC pauses change between {from} and {to}?",
+          "What caused the peak of GC pauses in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring GC pauses down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for GC pauses in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "gc-phases": {
+      "group": "gc",
+      "title": "Where GC time goes",
+      "developer": [
+        "Which GC phase is slowest?",
+        "Is time-to-safepoint a problem?",
+        "Are reference processing costs high?",
+        "What should I tune first?"
+      ],
+      "expert": [
+        "gc.phase.us breakdown.",
+        "TTSP vs pause inside.",
+        "References processed count.",
+        "Collector-specific phase hotspots."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did GC phases change between {from} and {to}?",
+          "What caused the peak of GC phases in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring GC phases down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for GC phases in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "compaction": {
+      "group": "gc",
+      "title": "Old gen compaction (full GCs)",
+      "developer": [
+        "Why did old gen need compaction?",
+        "Did compaction free enough space?",
+        "How often do full GCs run?",
+        "Is fragmentation the issue?"
+      ],
+      "expert": [
+        "Old-gen before/after full GC.",
+        "gc.full.count in the window.",
+        "Fragmentation / free-region signals.",
+        "Link to evac_promotion_failure."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did old-gen compaction change between {from} and {to}?",
+          "What caused the peak of old-gen compaction in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring old-gen compaction down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for old-gen compaction in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "zgc-reloc": {
+      "group": "gc",
+      "title": "Relocation over time",
+      "developer": [
+        "Why is ZGC relocating so much?",
+        "Is relocation keeping up with allocation?",
+        "Did relocation stall the app?",
+        "What changed in this window?"
+      ],
+      "expert": [
+        "gc.zgc.reloc_set.bytes trend.",
+        "Relocation vs stall overlap.",
+        "Heap occupancy during reloc.",
+        "Page type follow-up on zgc-pages."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did ZGC relocation change between {from} and {to}?",
+          "What caused the peak of ZGC relocation in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring ZGC relocation down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for ZGC relocation in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "zgc-pages": {
+      "group": "gc",
+      "title": "Relocation by page type",
+      "developer": [
+        "Which ZGC page type relocates most?",
+        "Are medium/large pages expensive here?",
+        "Is this expected for the live set?",
+        "What should I size differently?"
+      ],
+      "expert": [
+        "gc.zgc.reloc_group.bytes by page type.",
+        "Pages vs bytes share.",
+        "Link to humongous / large objects.",
+        "Reloc cost vs alloc rate."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did ZGC pages change between {from} and {to}?",
+          "What caused the peak of ZGC pages in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring ZGC pages down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for ZGC pages in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "zgc-alloc": {
+      "group": "gc",
+      "title": "Page allocations and uncommit",
+      "developer": [
+        "Why are there allocation stalls?",
+        "Is uncommit fighting allocation?",
+        "Is the heap too small for ZGC here?",
+        "When did stalls peak?"
+      ],
+      "expert": [
+        "gc.zgc.stall.us and page_alloc.bytes.",
+        "Uncommit/unmap vs alloc.",
+        "Overlap with zgc_alloc_stall incidents.",
+        "Recommend SoftMaxHeapSize / heap sizing."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did ZGC page allocation change between {from} and {to}?",
+          "What caused the peak of ZGC page allocation in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring ZGC page allocation down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for ZGC page allocation in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "metaspace": {
+      "group": "metaspace",
+      "title": "Metaspace",
+      "developer": [
+        "Why is metaspace growing on this chart?",
+        "How close are we to MaxMetaspaceSize?",
+        "Did a threshold GC fire?",
+        "Is this a loader leak?"
+      ],
+      "expert": [
+        "metaspace.used vs committed vs MaxMetaspaceSize.",
+        "Class-space used.",
+        "Threshold / alloc_failure / oom events.",
+        "Link to loader_leak / class_load_burst."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did metaspace change between {from} and {to}?",
+          "What caused the peak of metaspace in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring metaspace down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for metaspace in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "class-loading": {
+      "group": "classes",
+      "title": "Class loading",
+      "developer": [
+        "Why are classes still loading?",
+        "Which loader owns the growth?",
+        "Is unload keeping up?",
+        "Did a burst match a deploy?"
+      ],
+      "expert": [
+        "classes.loaded.per_s vs unloaded.per_s.",
+        "By-loader class counts.",
+        "Net class count trend.",
+        "Overlap with jit_backlog."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did class loading change between {from} and {to}?",
+          "What caused the peak of class loading in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring class loading down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for class loading in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "code-cache": {
+      "group": "codecache",
+      "title": "Code cache",
+      "developer": [
+        "Is the code cache filling up?",
+        "Which code heap is hottest?",
+        "Did a CodeCache full event fire?",
+        "Would a larger ReservedCodeCacheSize help?"
+      ],
+      "expert": [
+        "codecache.used.pct_reserved.",
+        "Per-heap used bytes.",
+        "Methods count trend.",
+        "codecache.full events."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did code cache change between {from} and {to}?",
+          "What caused the peak of code cache in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring code cache down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for code cache in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "nmt": {
+      "group": "nmt",
+      "title": "Native memory",
+      "developer": [
+        "What is using native memory?",
+        "Is native close to the pod limit?",
+        "Are direct buffers growing?",
+        "Which NMT category grew?"
+      ],
+      "expert": [
+        "nmt.category.committed.bytes.",
+        "Total committed vs container limit.",
+        "Direct buffer view.",
+        "Link to native_growth / direct_buffer_leak."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did native memory change between {from} and {to}?",
+          "What caused the peak of native memory in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring native memory down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for native memory in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "memory-limits": {
+      "group": "container",
+      "title": "Memory vs the pod limit",
+      "developer": [
+        "Is the pod close to its memory limit?",
+        "Is growth heap or RSS?",
+        "Will we be OOM-killed at this rate?",
+        "What should I raise?"
+      ],
+      "expert": [
+        "container.usage.pct_limit and RSS.",
+        "get_trend on container.usage.bytes.",
+        "Heap + NMT vs cgroup limit.",
+        "Overlap with container_near_limit."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did container memory change between {from} and {to}?",
+          "What caused the peak of container memory in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring container memory down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for container memory in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "threads": {
+      "group": "threads",
+      "title": "Threads over time",
+      "developer": [
+        "Why are so many threads live?",
+        "Is a pool growing without bound?",
+        "What are new threads doing?",
+        "Did starts spike with traffic?"
+      ],
+      "expert": [
+        "live/daemon/peak/started.per_s.",
+        "State breakdown from wall samples.",
+        "Overlap with thread_churn / thread_leak.",
+        "Pool saturation signals."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did thread counts change between {from} and {to}?",
+          "What caused the peak of thread counts in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring thread counts down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for thread counts in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "wall-flame": {
+      "group": "threads",
+      "title": "Wall-clock flame graph",
+      "developer": [
+        "Where do threads spend wall time?",
+        "Is the app waiting or running?",
+        "Which frames block requests?",
+        "How do I shrink the hottest wait?"
+      ],
+      "expert": [
+        "top_frames kind=wall.",
+        "Park/monitor/socket wait share.",
+        "Compare with cpu-flame.",
+        "Slow-call windows overlay."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did wall-clock samples change between {from} and {to}?",
+          "What caused the peak of wall-clock samples in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring wall-clock samples down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for wall-clock samples in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "locks": {
+      "group": "locks",
+      "title": "Lock contention by monitor class",
+      "developer": [
+        "Which lock class is hottest?",
+        "Are waits getting longer?",
+        "Did contention start with a deploy?",
+        "Which threads wait the most?"
+      ],
+      "expert": [
+        "locks.wait.ms_per_s by monitor class.",
+        "Count vs max wait views.",
+        "Over-time contention.",
+        "Link to lock_contention / single_hot_lock."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did lock waits change between {from} and {to}?",
+          "What caused the peak of lock waits in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring lock waits down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for lock waits in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "lock-flame": {
+      "group": "locks",
+      "title": "Lock wait flame graph",
+      "developer": [
+        "Who waits on locks in my code?",
+        "What does the owner stack look like?",
+        "Is one monitor dominating?",
+        "How do I reduce that wait?"
+      ],
+      "expert": [
+        "Flame kind=lock.",
+        "Owner vs waiter stacks.",
+        "Hot monitor class frames.",
+        "Overlap with endpoint latency."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did lock-wait samples change between {from} and {to}?",
+          "What caused the peak of lock-wait samples in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring lock-wait samples down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for lock-wait samples in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "vthreads": {
+      "group": "vt",
+      "title": "Virtual thread pinning",
+      "developer": [
+        "Why are virtual threads pinned?",
+        "Which code site pins carriers?",
+        "Are submit failures happening too?",
+        "How do I fix the pin?"
+      ],
+      "expert": [
+        "vt.pinned.us / per_s / ms_per_s.",
+        "Pin sites view.",
+        "submit_failed.count.",
+        "Overlap with pinning_burst."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did virtual thread pinning change between {from} and {to}?",
+          "What caused the peak of virtual thread pinning in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring virtual thread pinning down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for virtual thread pinning in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "safepoints": {
+      "group": "safepoint",
+      "title": "Safepoints",
+      "developer": [
+        "Why so much safepoint time?",
+        "Is time-to-safepoint slow?",
+        "Which operation causes safepoints?",
+        "Did safepoints stretch GC pauses?"
+      ],
+      "expert": [
+        "safepoint.duration.us and ttsp.us.",
+        "Ops breakdown.",
+        "time_pct of runtime.",
+        "Overlap with ttsp_spike / safepoint_overhead."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did safepoints change between {from} and {to}?",
+          "What caused the peak of safepoints in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring safepoints down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for safepoints in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "jit": {
+      "group": "jit",
+      "title": "JIT compilations and deopts",
+      "developer": [
+        "Why so many deopts?",
+        "Is the compile queue backed up?",
+        "Which methods are unstable?",
+        "Is compile time a large share of CPU?"
+      ],
+      "expert": [
+        "jit.deopts.per_min and reasons.",
+        "Compile queue backlog (JDK 25).",
+        "compiles.per_s vs compile.us.",
+        "Overlap with deopt_storm / jit_backlog."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did JIT activity change between {from} and {to}?",
+          "What caused the peak of JIT activity in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring JIT activity down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for JIT activity in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "socket": {
+      "group": "socket",
+      "title": "Socket read latency",
+      "developer": [
+        "Which peer is slow?",
+        "Are reads past the recording threshold?",
+        "Did latency jump with traffic?",
+        "Is this DB or another service?"
+      ],
+      "expert": [
+        "socket.read.us by peer.",
+        "Bytes and read_time.ms_per_s.",
+        "Slow socket events.",
+        "Overlap with slow_peer."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did socket read latency change between {from} and {to}?",
+          "What caused the peak of socket read latency in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring socket read latency down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for socket read latency in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "network": {
+      "group": "socket",
+      "title": "Network",
+      "developer": [
+        "Is the network saturated?",
+        "Why so many TLS handshakes?",
+        "Are writes slow too?",
+        "Which interface carries the traffic?"
+      ],
+      "expert": [
+        "rx/tx bytes_per_s per interface.",
+        "TLS handshakes.per_s.",
+        "Slow write us.",
+        "Overlap with tls_churn / slow_peer."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did network activity change between {from} and {to}?",
+          "What caused the peak of network activity in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring network activity down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for network activity in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "socket-flame": {
+      "group": "socket",
+      "title": "Socket I/O flame graph",
+      "developer": [
+        "Which code waits on sockets?",
+        "Is the wait in my client or server path?",
+        "What peer shows up in the stacks?",
+        "How do I cut that wait?"
+      ],
+      "expert": [
+        "Flame kind=socket.",
+        "Top wait frames.",
+        "App vs netty/jdk clients.",
+        "Link to endpoint wait-cause."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did socket I/O samples change between {from} and {to}?",
+          "What caused the peak of socket I/O samples in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring socket I/O samples down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for socket I/O samples in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "file-io": {
+      "group": "file",
+      "title": "File I/O",
+      "developer": [
+        "Which file path is slow?",
+        "Is disk or NFS the bottleneck?",
+        "Are container disk iops high?",
+        "Did file I/O block request threads?"
+      ],
+      "expert": [
+        "file.io.us by path.",
+        "Disk iops/bytes_per_s.",
+        "Slow file events.",
+        "Overlap with slow_file_io."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did file I/O change between {from} and {to}?",
+          "What caused the peak of file I/O in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring file I/O down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for file I/O in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "exceptions": {
+      "group": "exceptions",
+      "title": "Exceptions",
+      "developer": [
+        "Which exceptions are spiking?",
+        "Are Errors involved?",
+        "What code throws them?",
+        "Do they reach users?"
+      ],
+      "expert": [
+        "exceptions.thrown.per_s over time.",
+        "Errors by class.",
+        "Top throw frames via list_events.",
+        "Overlap with exception_storm / error_thrown."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did exceptions change between {from} and {to}?",
+          "What caused the peak of exceptions in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring exceptions down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for exceptions in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "endpoints-time": {
+      "group": "endpoint",
+      "title": "Traffic and latency per endpoint",
+      "developer": [
+        "Which endpoint got slow?",
+        "Did traffic jump with latency?",
+        "Is max latency a GC pause?",
+        "What changed recently?"
+      ],
+      "expert": [
+        "endpoint.calls.per_s and latency.us.",
+        "Per-endpoint rate vs avg/max views.",
+        "Overlap with slow_requests.",
+        "Follow up on slow-breakdown."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did endpoint traffic change between {from} and {to}?",
+          "What caused the peak of endpoint traffic in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring endpoint traffic down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for endpoint traffic in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "endpoints-overview": {
+      "group": "endpoint",
+      "title": "Endpoints overview",
+      "developer": [
+        "Which endpoint is worst right now?",
+        "What is the slow-call percentage?",
+        "Is one route dominating traffic?",
+        "Where should I start?"
+      ],
+      "expert": [
+        "Table: calls, avg, max, slow count/% .",
+        "Sort by slow pct then max.",
+        "Link row to slow-calls scatter.",
+        "Wait-cause next step."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did endpoint overview change between {from} and {to}?",
+          "What caused the peak of endpoint overview in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring endpoint overview down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for endpoint overview in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "slow-calls": {
+      "group": "endpoint",
+      "title": "Slow calls",
+      "developer": [
+        "When did slow calls cluster?",
+        "Which endpoint dots are worst?",
+        "Did they line up with a GC pause?",
+        "How many slow calls in this window?"
+      ],
+      "expert": [
+        "endpoint.slow.us scatter over time.",
+        "Slow count vs threshold.",
+        "Overlap with GC/lock/peer incidents.",
+        "Open slow-breakdown for causes."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did slow calls change between {from} and {to}?",
+          "What caused the peak of slow calls in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring slow calls down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for slow calls in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    },
+    "slow-breakdown": {
+      "group": "endpoint",
+      "title": "Slow-call breakdown by wait cause",
+      "developer": [
+        "What are slow calls waiting on?",
+        "Is it CPU, lock, I/O, or GC?",
+        "Show the flame for slow windows.",
+        "What should I fix first?"
+      ],
+      "expert": [
+        "endpoint.slow.wait.pct by cause.",
+        "Flame kind=wall in slow-call windows.",
+        "CPU flame for the same windows.",
+        "Map causes to incidents."
+      ],
+      "range_questions": {
+        "developer": [
+          "Why did slow-call wait causes change between {from} and {to}?",
+          "What caused the peak of slow-call wait causes in {from}–{to}?",
+          "Do any incidents explain {from}–{to} on this chart?",
+          "What would bring slow-call wait causes down in this window?"
+        ],
+        "expert": [
+          "Series stats and slope for slow-call wait causes in {from}–{to}.",
+          "Overlapping incidents and top frames in {from}–{to}.",
+          "Compare {from}–{to} with the surrounding baseline.",
+          "Which tool args pin this exact RFC 3339 range?"
+        ]
+      }
+    }
+  }
+}

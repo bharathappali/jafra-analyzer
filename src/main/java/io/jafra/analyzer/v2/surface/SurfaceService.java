@@ -32,6 +32,9 @@ import io.jafra.analyzer.v2.incidents.Baseline;
 import io.jafra.analyzer.v2.incidents.BaselineService;
 import io.jafra.analyzer.v2.catalogue.ChartSpec;
 import io.jafra.analyzer.v2.catalogue.MetricSpec;
+import io.jafra.analyzer.v2.questions.PersonaQuestions;
+import io.jafra.analyzer.v2.questions.QuestionText;
+import io.jafra.analyzer.v2.questions.QuestionsCatalogue;
 import io.jafra.analyzer.v2.query.QueryService;
 import io.jafra.analyzer.v2.rollup.LogHistogram;
 import io.jafra.analyzer.v2.store.V2Store;
@@ -58,15 +61,22 @@ public class SurfaceService {
     private final BaselineService baselines;
     private final FrameService frames;
     private final TrendService trends;
+    private final QuestionsCatalogue questions;
 
     @Inject
     public SurfaceService(
-            V2Store store, Catalogue catalogue, BaselineService baselines, FrameService frames, TrendService trends) {
+            V2Store store,
+            Catalogue catalogue,
+            BaselineService baselines,
+            FrameService frames,
+            TrendService trends,
+            QuestionsCatalogue questions) {
         this.store = store;
         this.catalogue = catalogue;
         this.baselines = baselines;
         this.frames = frames;
         this.trends = trends;
+        this.questions = questions;
     }
 
     /** Overview lanes for one range. Incident groups are chosen from these. */
@@ -174,6 +184,7 @@ public class SurfaceService {
                     summary.put(row.metric(), stats);
                 }
             }
+            String metric = chart.metrics().isEmpty() ? "" : chart.metrics().get(0);
             return new ChartData(
                     chart.id(),
                     chart.title(),
@@ -186,7 +197,9 @@ public class SurfaceService {
                     markers,
                     flame(jvm, chart, kind, last, from, to),
                     summary,
-                    trend(jvm, chart, series, last, from, to));
+                    trend(jvm, chart, series, last, from, to),
+                    QuestionText.chart(questions, chart.id(), chart.title(), metric),
+                    QuestionText.range(questions, chart.id(), chart.title(), metric));
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
@@ -729,6 +742,8 @@ public class SurfaceService {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record ChartList(List<ChartCard> charts) {}
 
+    // questions are filled. rangeQuestions still contain {from} and {to}.
+    // The UI fills those from the brush as HH:MM:SS UTC. There is no brushed-range endpoint.
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record ChartData(
@@ -743,7 +758,9 @@ public class SurfaceService {
             List<ObjectNode> markers,
             FrameService.Flame flame,
             Map<String, SeriesSummary> summary,
-            ObjectNode trend) {}
+            ObjectNode trend,
+            PersonaQuestions questions,
+            PersonaQuestions rangeQuestions) {}
 
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Segment(String from, String to, String state) {}

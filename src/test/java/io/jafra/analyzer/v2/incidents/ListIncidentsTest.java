@@ -53,7 +53,7 @@ class ListIncidentsTest {
 
         JsonPath listed = given().queryParam("from", "0").queryParam("to", "10000").get(base).then().statusCode(200).extract().jsonPath();
         assertEquals(
-                Set.of("id", "type", "group", "level", "status", "t0", "t1", "peak_at", "headline", "confidence", "related"),
+                Set.of("id", "type", "group", "level", "status", "t0", "t1", "peak_at", "headline", "confidence", "related", "questions"),
                 listed.getMap("incidents.find { it.id == '" + open + "' }").keySet());
         assertEquals(closed, listed.getString("incidents.find { it.id == '" + open + "' }.related[0].id"));
         assertEquals("heap_near_full", listed.getString("incidents.find { it.id == '" + open + "' }.related[0].type"));

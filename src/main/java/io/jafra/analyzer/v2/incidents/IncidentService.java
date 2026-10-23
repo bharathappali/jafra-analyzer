@@ -17,6 +17,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.jafra.analyzer.v2.api.V2Exception;
 import io.jafra.analyzer.v2.api.V2Range;
 import io.jafra.analyzer.v2.api.V2Times;
+import io.jafra.analyzer.v2.questions.QuestionText;
+import io.jafra.analyzer.v2.questions.QuestionsCatalogue;
 import io.jafra.analyzer.v2.store.V2Store;
 import io.jafra.analyzer.v2.store.V2Store.IncidentRecord;
 import io.jafra.analyzer.v2.store.V2Store.JvmRow;
@@ -27,10 +29,12 @@ public class IncidentService {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final V2Store store;
+    private final QuestionsCatalogue questions;
 
     @Inject
-    public IncidentService(V2Store store) {
+    public IncidentService(V2Store store, QuestionsCatalogue questions) {
         this.store = store;
+        this.questions = questions;
     }
 
     public ObjectNode list(JvmRow jvm, String level, String status, String group, String last, String from, String to) {
@@ -67,7 +71,7 @@ public class IncidentService {
             }
             ArrayNode incidents = JSON.createArrayNode();
             for (IncidentRecord row : rows) {
-                incidents.add(summary(row));
+                incidents.add(summary(jvm, row));
             }
             ObjectNode body = JSON.createObjectNode();
             ObjectNode window = body.putObject("window");
@@ -107,13 +111,13 @@ public class IncidentService {
             if (row == null || row.jvmId() != jvm.jvmId()) {
                 throw V2Exception.unknownIncident(latestIds(jvm));
             }
-            return document(row);
+            return document(jvm, row);
         } catch (IOException error) {
             throw new IllegalStateException(error);
         }
     }
 
-    private static ObjectNode summary(IncidentRecord row) {
+    private ObjectNode summary(JvmRow jvm, IncidentRecord row) {
         ObjectNode node = JSON.createObjectNode();
         node.put("id", row.id());
         node.put("type", row.type());
@@ -132,10 +136,11 @@ public class IncidentService {
         JsonNode together = tree(row.togetherJson());
         JsonNode related = together.get("related");
         node.set("related", related != null && related.isArray() ? related : JSON.createArrayNode());
+        node.set("questions", QuestionText.incidentNode(questions, row, jvm.podName()));
         return node;
     }
 
-    private static ObjectNode document(IncidentRecord row) {
+    private ObjectNode document(JvmRow jvm, IncidentRecord row) {
         ObjectNode node = JSON.createObjectNode();
         node.put("id", row.id());
         node.put("type", row.type());
@@ -161,6 +166,7 @@ public class IncidentService {
         node.set("todo", tree(row.todoJson()));
         node.set("sources", tree(row.sourcesJson()));
         node.set("flags", tree(row.flagsJson()));
+        node.set("questions", QuestionText.incidentNode(questions, row, jvm.podName()));
         return node;
     }
 
