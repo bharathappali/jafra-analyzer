@@ -6,6 +6,7 @@ import java.util.Map;
 
 import io.jafra.analyzer.v2.incidents.support.InternalInputs;
 import io.jafra.analyzer.v2.rollup.ChunkFacts;
+import io.jafra.analyzer.v2.rollup.Frames;
 import io.jafra.analyzer.v2.rollup.Seen;
 import io.jafra.analyzer.v2.rollup.WindowData;
 import io.jafra.analyzer.v2.rollup.extract.Extractors;
@@ -97,7 +98,8 @@ public final class InternalExtractors {
         for (Seen stall : facts.ofType("jdk.ZAllocationStall")) {
             Double duration = stall.num("duration");
             long stack = Extractors.remember(out, stall.frames);
-            String fields = "{\"type\":" + quote(stall.text("type")) + ",\"size\":" + number(stall.num("size")) + "}";
+            String fields = "{\"type\":" + quote(stall.text("type")) + ",\"size\":" + number(stall.num("size"))
+                    + ",\"top_frame\":" + quote(Frames.top(stall.frames)) + ",\"stack_id\":" + stack + "}";
             out.internalEvent(new WindowData.StoredEvent(
                     InternalInputs.ZGC_STALL,
                     stall.startMs,
@@ -142,10 +144,10 @@ public final class InternalExtractors {
         for (Map.Entry<String, Seen> entry : last.entrySet()) {
             String key = "handler=" + entry.getKey();
             Seen timing = entry.getValue();
-            put(out, InternalInputs.METHOD_INVOCATIONS, key, timing.num("invocations"));
-            put(out, InternalInputs.METHOD_AVERAGE, key, timing.num("average"));
-            put(out, InternalInputs.METHOD_MAXIMUM, key, timing.num("maximum"));
-            put(out, InternalInputs.METHOD_MINIMUM, key, timing.num("minimum"));
+            put(out, InternalInputs.METHOD_TIMING_RAW, key + ";field=invocations", timing.num("invocations"));
+            put(out, InternalInputs.METHOD_TIMING_RAW, key + ";field=average", timing.num("average"));
+            put(out, InternalInputs.METHOD_TIMING_RAW, key + ";field=maximum", timing.num("maximum"));
+            put(out, InternalInputs.METHOD_TIMING_RAW, key + ";field=minimum", timing.num("minimum"));
         }
     }
 

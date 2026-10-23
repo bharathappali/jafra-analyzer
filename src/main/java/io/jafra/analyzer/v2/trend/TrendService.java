@@ -99,6 +99,42 @@ public class TrendService {
         }
     }
 
+    /**
+     * In-memory trend. Fewer than 30 points or a span under 300 s is unknown, with reason
+     * {@code not enough data yet (n/30)}. The math matches {@link TrendMath#assess}. Series longer
+     * than 360 points are step-averaged first.
+     */
+    public static Analysis analyze(long[] tMs, double[] y, Double limit) {
+        if (tMs == null || y == null || tMs.length != y.length) {
+            throw new IllegalArgumentException("times and values differ");
+        }
+        int n = y.length;
+        long span = n == 0 ? 0L : tMs[n - 1] - tMs[0];
+        if (n < TrendMath.MIN_POINTS || span < TrendMath.MIN_SPAN_MS) {
+            return Analysis.unknown("not enough data yet (" + n + "/30)", n);
+        }
+        long[] times = tMs;
+        double[] values = y;
+        if (values.length > 360) {
+            long step = QueryService.coarsen(5_000L, Math.max(1L, span), 360);
+            double[][] buckets = bucket(times, values, step);
+            times = new long[buckets.length];
+            values = new double[buckets.length];
+            for (int i = 0; i < buckets.length; i++) {
+                times[i] = (long) buckets[i][0];
+                values[i] = buckets[i][1];
+            }
+        }
+        TrendMath.Result result = TrendMath.assess(times, values, limit);
+        return new Analysis(true, null, result);
+    }
+
+    public record Analysis(boolean known, String reason, TrendMath.Result result) {
+        static Analysis unknown(String reason, int n) {
+            return new Analysis(false, reason, new TrendMath.Result(0d, 0d, 0d, 1d, 1d, false, "unknown", null, null, n));
+        }
+    }
+
     private Limit limit(JvmRow jvm, MetricSpec metric, V2Range range) throws IOException {
         String named = metric.limit();
         if (named == null) {

@@ -12,13 +12,8 @@ public final class InternalInputs {
     public static final String ZGC_STALL = "internal.zgc.stall";
     public static final String REDEFINE = "internal.redefine";
     public static final String LOCK_WAIT = "internal.lock.wait_ms_per_s";
-    public static final String METHOD_INVOCATIONS = "internal.methodtiming.invocations";
-    public static final String METHOD_AVERAGE = "internal.methodtiming.average";
-    public static final String METHOD_MAXIMUM = "internal.methodtiming.maximum";
-    public static final String METHOD_MINIMUM = "internal.methodtiming.minimum";
-    public static final String ENDPOINT_CALLS = "internal.endpoint.calls";
-    public static final String ENDPOINT_AVG_US = "internal.endpoint.avg_us";
-    public static final String ENDPOINT_MAX_US = "internal.endpoint.max_us";
+    public static final String METHOD_TIMING_RAW = "internal.methodtiming.raw";
+    public static final String ENDPOINT_WINDOW = "internal.endpoint.window";
 
     private InternalInputs() {}
 }

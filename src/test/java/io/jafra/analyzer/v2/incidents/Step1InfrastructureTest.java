@@ -16,12 +16,14 @@ import io.jafra.analyzer.v2.catalogue.Catalogue;
 import io.jafra.analyzer.v2.incidents.IncidentLifecycle.Kind;
 import io.jafra.analyzer.v2.incidents.IncidentLifecycle.State;
 import io.jafra.analyzer.v2.incidents.support.DetectorMetrics;
+import io.jafra.analyzer.v2.incidents.support.DetectorSupport;
 import io.jafra.analyzer.v2.incidents.support.InternalInputs;
 import io.jafra.analyzer.v2.incidents.support.RobustZ;
 import io.jafra.analyzer.v2.rollup.ChunkFacts;
 import io.jafra.analyzer.v2.rollup.Seen;
 import io.jafra.analyzer.v2.rollup.WindowData;
 import io.jafra.analyzer.v2.rollup.extract.Extractors;
+import io.jafra.analyzer.v2.trend.TrendService;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 
@@ -106,6 +108,24 @@ class Step1InfrastructureTest {
         assertTrue(out.internalEvents().stream().anyMatch(event -> InternalInputs.ZGC_STALL.equals(event.type())));
         assertTrue(out.samples().keySet().stream().anyMatch(key -> "malloc".equals(key.kind())));
     }
+
+    @Test
+    void trendAndHeadroomAndMethodTiming() {
+        TrendService.Analysis shortSeries = TrendService.analyze(new long[] {0L, 1_000L}, new double[] {1d, 2d}, 10d);
+        assertTrue(!shortSeries.known());
+        assertEquals("not enough data yet (2/30)", shortSeries.reason());
+        DetectorSupport.Headroom missing = DetectorSupport.headroom(null, 1d, 10d);
+        assertNull(missing.minutes());
+        assertEquals("no pod memory limit", missing.reason());
+        DetectorSupport.Headroom room = DetectorSupport.headroom(1_000d, 400d, 120d);
+        assertEquals(300d, room.minutes());
+        assertEquals(MethodTimingDelta.Mode.CUMULATIVE, MethodTimingDelta.infer(List.of(10d, 12d, 20d)));
+        assertEquals(MethodTimingDelta.Mode.PER_PERIOD, MethodTimingDelta.infer(List.of(10d, 12d, 4d)));
+        MethodTimingDelta.Delta delta = MethodTimingDelta.delta(
+                MethodTimingDelta.Mode.CUMULATIVE, 10d, 20d, 5d, 6d, 8d, 8d);
+        assertEquals(10d, delta.calls());
+        assertTrue(!delta.maxKnown());
+    }
 }
 
 @QuarkusTest
@@ -119,5 +139,6 @@ class DetectorBandsLoadTest {
         assertEquals(1000d, bands.longPause().criticalMs());
         assertEquals(85d, bands.heapNearFull().warningPct());
         assertEquals(90d, bands.containerNearLimit().warningPct());
+        assertEquals("AUTO", bands.methodTiming().mode());
     }
 }
