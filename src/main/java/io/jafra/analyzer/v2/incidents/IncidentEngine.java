@@ -128,6 +128,11 @@ public class IncidentEngine {
                     open.add(row);
                 }
             }
+            for (Detector detector : active) {
+                if (detector instanceof PeerAware peer) {
+                    verdicts.put(detector.type(), peer.adjust(verdicts.get(detector.type()), verdicts, open));
+                }
+            }
             TogetherContext context = new TogetherContext(verdicts, open);
             for (TogetherRule rule : rules) {
                 rule.apply(context);
@@ -347,13 +352,22 @@ public class IncidentEngine {
         ArrayNode related = JSON.createArrayNode();
         long fromMs = worst.fromMs();
         long toMs = worst.toMs();
+        List<IncidentRecord> overlapping = new ArrayList<>();
         for (IncidentRecord row : store.incidents(jvm.jvmId())) {
             if (type.equals(row.type())) {
                 continue;
             }
             if (row.t0() < toMs && (row.t1() == null || row.t1() >= fromMs)) {
-                related.add(JSON.createObjectNode().put("id", row.id()).put("type", row.type()));
+                overlapping.add(row);
             }
+        }
+        List<String> preferred = TogetherLinks.first(type);
+        overlapping.sort(Comparator.comparingInt(row -> {
+            int index = preferred.indexOf(row.type());
+            return index < 0 ? preferred.size() + 1 : index;
+        }));
+        for (IncidentRecord row : overlapping) {
+            related.add(JSON.createObjectNode().put("id", row.id()).put("type", row.type()));
         }
         ArrayNode groups = JSON.createArrayNode();
         List<Lane> lanes = new ArrayList<>(surface.overviewLanes(jvm, fromMs, toMs));

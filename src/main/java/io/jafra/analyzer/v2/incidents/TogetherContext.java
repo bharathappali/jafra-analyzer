@@ -1,6 +1,7 @@
 package io.jafra.analyzer.v2.incidents;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -15,7 +16,7 @@ public final class TogetherContext {
     private final List<IncidentRecord> openIncidents;
 
     public TogetherContext(Map<String, WindowVerdict> verdicts, List<IncidentRecord> openIncidents) {
-        this.verdicts = verdicts;
+        this.verdicts = new LinkedHashMap<>(verdicts);
         this.openIncidents = List.copyOf(openIncidents);
     }
 
@@ -65,6 +66,27 @@ public final class TogetherContext {
                 current.flags(),
                 current.measuredAt(),
                 current.openNow()));
+    }
+
+    public void prependTodo(String type, String todo) {
+        WindowVerdict current = verdicts.get(type);
+        if (current == null || todo == null || todo.isBlank() || current.state() == State.UNKNOWN || current.state() == State.OK) {
+            return;
+        }
+        List<String> lines = new ArrayList<>();
+        lines.add(todo);
+        lines.addAll(current.todo());
+        replace(type, copy(current, current.state(), lines, current.reason(), current.flags()));
+    }
+
+    public void appendReason(String type, String suffix) {
+        WindowVerdict current = verdicts.get(type);
+        if (current == null || suffix == null || suffix.isBlank()) {
+            return;
+        }
+        String reason = current.reason() == null ? "" : current.reason();
+        reason = reason.isBlank() ? suffix : reason + " " + suffix;
+        replace(type, copy(current, current.state(), current.todo(), reason, current.flags()));
     }
 
     public void addFlag(String type, String flag) {
